@@ -14,7 +14,6 @@
         .modal { transition: opacity 0.25s ease; }
         body.modal-active { overflow: hidden; }
         #video-container { position: relative; width: 100%; height: 100%; min-height: 500px; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 0.5rem; }
-        /* PERBAIKAN: Zoom 1.5x sesuai instruksi Bapak */
         .telephoto-zoom { transform: scale(1.5); transform-origin: center; transition: transform 0.3s ease; }
         #video, #overlay-canvas, #result-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
         #result-canvas { z-index: 40; }
@@ -28,7 +27,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v4.0 Dynamic Core (F4 Edition & Zoom 1.5x)</p>
+            <p class="text-sm text-slate-300 mt-1">HD True-Crop Camera & F4 Master Edition</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -39,13 +38,13 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">OMR v41 (ULTIMATE)</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">OMR v42 (HD CROP)</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai.<br>
-                > Lensa Telephoto (Zoom 1.5x)... Aktif.<br>
-                > Dukungan Kertas F4 (Folio)... Diperluas.<br>
-                > Logika True-Manual (Upload Engine)... Aktif.<br>
+                > Request Kamera HD 1080p... Aktif.<br>
+                > Filter F4 (Ultra Wide Area)... Aktif.<br>
+                > True-Crop Manual Capture... Aktif.<br>
                 > Menunggu aksi pengguna...<br>
             </div>
             <div>
@@ -63,13 +62,12 @@
                 <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
                     <svg class="w-16 h-16 mx-auto mb-3 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
                     Arahkan kamera ke LJK atau Upload Scan.<br>
-                    <span class="text-xs text-emerald-400">Kamera dikunci pada Zoom 1.5x (Optimal untuk A4 & F4).</span>
+                    <span class="text-xs text-emerald-400">Paskan LJK (A4/F4) di layar lalu diamkan untuk Auto, atau tekan Manual.</span>
                 </div>
                 <video id="video" playsinline autoplay muted class="hidden telephoto-zoom"></video>
                 <canvas id="overlay-canvas" class="hidden pointer-events-none telephoto-zoom"></canvas>
                 <canvas id="result-canvas" class="hidden z-40 bg-white"></canvas>
                 
-                <!-- TOMBOL JEPRET MANUAL -->
                 <button id="btn-manual-capture" class="hidden absolute bottom-6 left-1/2 transform -translate-x-1/2 bg-white text-emerald-600 px-6 py-3 rounded-full font-bold shadow-2xl z-50 border-2 border-emerald-500 hover:bg-emerald-50 transition active:scale-95 flex items-center gap-2">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
                     Jepret Manual
@@ -262,17 +260,24 @@
 
     const checkCV = setInterval(() => { if (typeof cv !== 'undefined' && cv.Mat) { clearInterval(checkCV); document.getElementById('cv-status').innerHTML = '<div class="w-3 h-3 rounded-full bg-emerald-500"></div> OpenCV Siap'; } }, 500);
 
-    // --- EVENT LISTENERS ---
+    // --- EVENT LISTENERS (HD VIDEO REQUEST) ---
     document.getElementById('btn-camera').addEventListener('click', async () => {
         if (!validateKey()) return; 
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { showCustomAlert("Akses kamera tidak diizinkan."); return; }
         resetUI(); video.classList.remove('hidden'); overlayCanvas.classList.remove('hidden');
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            // PERBAIKAN: Meminta resolusi HD 1080p agar detail F4 tidak blur
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { 
+                    facingMode: 'environment',
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
+                } 
+            });
             video.srcObject = stream;
             video.onloadedmetadata = () => {
                 video.play().then(() => {
-                    let scale = Math.min(640 / Math.max(video.videoWidth, video.videoHeight), 1.0);
+                    let scale = Math.min(1080 / Math.max(video.videoWidth, video.videoHeight), 1.0);
                     hiddenCanvas.width = video.videoWidth * scale; hiddenCanvas.height = video.videoHeight * scale;
                     overlayCanvas.width = hiddenCanvas.width; overlayCanvas.height = hiddenCanvas.height;
                     document.getElementById('btn-manual-capture').classList.remove('hidden');
@@ -284,7 +289,7 @@
 
     document.getElementById('btn-manual-capture').addEventListener('click', () => {
         if (!video.paused && !video.ended) {
-            logAI("Jepret Manual dipicu...");
+            logAI("Jepret Manual dipicu! Mensimulasikan gambar Upload...");
             if (videoScanLoop) cancelAnimationFrame(videoScanLoop);
             executeCapture(true);
         }
@@ -304,7 +309,7 @@
         }; reader.readAsDataURL(e.target.files[0]);
     });
 
-    // --- CORE LOGIC 1: PENCARIAN BATAS KERTAS (SUPPORT F4 & UPLOAD ROBUST) ---
+    // --- CORE LOGIC 1: PENCARIAN BATAS KERTAS (TOLERANSI F4 EKSTREM) ---
     function getPaperContour(src, isLiveCam = false) {
         let procMat = new cv.Mat();
         let targetWidth = isLiveCam ? 480.0 : 800.0; 
@@ -326,11 +331,14 @@
 
         for (let i = 0; i < cnts.size(); ++i) {
             let c = cnts.get(i), area = cv.contourArea(c);
-            // Toleransi ukuran diperlonggar agar Upload atau Jepret Manual F4 tetap masuk
-            if (area > (imgArea * 0.05) && area < (imgArea * 0.98)) {
+            
+            // PERBAIKAN F4 (Live Cam): Area minimum diturunkan ke 5%.
+            // Karena F4 panjang, jika difoto dari jauh persentase layarnya lebih kecil dari A4
+            let minArea = isLiveCam ? 0.05 : 0.05; 
+            if (area > (imgArea * minArea) && area < (imgArea * 0.98)) {
                 let approx = new cv.Mat();
-                // Epsilon 0.03 agar sisi F4 yang agak melengkung tetap dibaca lurus (4 sudut)
-                let epsilon = isLiveCam ? 0.03 : 0.02;
+                // Toleransi lengkung kertas F4 dinaikkan ke 0.04 untuk LiveCam
+                let epsilon = isLiveCam ? 0.04 : 0.02;
                 cv.approxPolyDP(c, approx, epsilon * cv.arcLength(c, true), true);
                 
                 if (approx.rows === 4) {
@@ -339,7 +347,6 @@
                     let d1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y), d2 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
                     let aspect = Math.max(d1, d2) / (Math.min(d1, d2) || 1);
                     
-                    // PERBAIKAN: Rasio dilebarkan ke 2.5. Sangat aman untuk menangkap Kertas F4/Folio yang difoto agak miring
                     if (aspect >= 0.5 && aspect <= 2.5 && area > maxArea) { maxArea = area; bestPts = pts; }
                 } approx.delete();
             }
@@ -391,13 +398,32 @@
         } loop();
     }
 
+    // PERBAIKAN FATAL: TRUE-CROP MANUAL CAPTURE
     function executeCapture(isManual = false) {
         let captureCanvas = document.createElement('canvas');
         captureCanvas.width = video.videoWidth; captureCanvas.height = video.videoHeight;
         captureCanvas.getContext('2d').drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
         
         let exactPts = null;
-        if (!isManual && smoothedMarkers) {
+        let finalCanvas = captureCanvas; // Secara default gunakan gambar penuh
+        
+        if (isManual) {
+            // Karena UI layar di-zoom 1.5x (CSS transform: scale(1.5)), 
+            // kita HARUS memotong (crop) gambar asli sebesar 1.5x dari tengah
+            // agar hasilnya sama persis dengan yang Bapak bidik/lihat di HP.
+            let scale = 1.5;
+            let cw = video.videoWidth / scale;
+            let ch = video.videoHeight / scale;
+            let cx = (video.videoWidth - cw) / 2;
+            let cy = (video.videoHeight - ch) / 2;
+
+            let croppedCanvas = document.createElement('canvas');
+            croppedCanvas.width = cw; croppedCanvas.height = ch;
+            // Gambar hanya area tengah (yang terlihat di UI)
+            croppedCanvas.getContext('2d').drawImage(captureCanvas, cx, cy, cw, ch, 0, 0, cw, ch);
+            
+            finalCanvas = croppedCanvas; // Kirim gambar yang sudah dipotong ke mesin Upload!
+        } else if (smoothedMarkers) {
             let scaleX = video.videoWidth / hiddenCanvas.width, scaleY = video.videoHeight / hiddenCanvas.height;
             exactPts = [
                 {x: smoothedMarkers.tl.x * scaleX, y: smoothedMarkers.tl.y * scaleY},
@@ -408,7 +434,7 @@
         }
 
         resetUI(); document.getElementById('loader-overlay').classList.remove('hidden');
-        setTimeout(() => processLJKPipeline(captureCanvas, exactPts, isManual), 200);
+        setTimeout(() => processLJKPipeline(finalCanvas, exactPts, isManual), 200);
     }
 
     // --- CORE LOGIC 2: PEMROSESAN OMR ---
@@ -419,30 +445,21 @@
             src = cv.imread(canvas);
             if (!exactPts && src.cols > src.rows) cv.rotate(src, src, cv.ROTATE_90_CLOCKWISE);
 
-            // LOGIKA TRUE MANUAL: Jika ini Jepret Manual, proses dengan mesin Upload (isLiveCam = false)
+            // Karena untuk Mode Manual gambarnya sudah kita crop agar persis sama dengan layar UI,
+            // mesin Upload ini (isLiveCam = false) pasti akan langsung menemukan batas kertas F4/A4!
             let paperPts = exactPts;
             if (!paperPts) {
-                logAI(isManual ? "Mode Jepret Manual: Menganalisis gambar resolusi tinggi..." : "Memproses Mode Upload...");
                 paperPts = getPaperContour(src, false); 
             }
             
-            // PERBAIKAN FATAL: Fallback crop jika mesin Upload GAGAL membedakan LJK dengan Meja
+            // Jaring pengaman terakhir: Jika benar-benar masih meleset
             if (!paperPts && isManual) {
-                logAI("Batas kertas gagal dideteksi murni. Memotong paksa area sesuai pandangan layar (Zoom 1.5x).");
+                logAI("Batas kertas tidak jelas. Memotong paksa bingkai gambar layar.");
                 let w = src.cols, h = src.rows;
-                // Karena UI diperbesar (zoom: 1.5), area yg terlihat pengguna (dan difoto) hanyalah area tengah!
-                let scale = 1.5;
-                let vw = w / scale; // Lebar layar yg terlihat
-                let vh = h / scale; // Tinggi layar yg terlihat
-                let cx = w / 2;
-                let cy = h / 2;
-                
-                // Ambil 96% dari area yg TERLIHAT di layar HP Bapak
+                // Ambil 98% layar karena gambar sudah dicrop sebelumnya sesuai zoom 1.5x
                 paperPts = [ 
-                    {x: cx - vw*0.48, y: cy - vh*0.48}, 
-                    {x: cx + vw*0.48, y: cy - vh*0.48}, 
-                    {x: cx + vw*0.48, y: cy + vh*0.48}, 
-                    {x: cx - vw*0.48, y: cy + vh*0.48} 
+                    {x: w*0.01, y: h*0.01}, {x: w*0.99, y: h*0.01}, 
+                    {x: w*0.99, y: h*0.99}, {x: w*0.01, y: h*0.99} 
                 ];
             }
 
@@ -499,7 +516,7 @@
                 cv.imshow('result-canvas', debugMat);
                 document.getElementById('result-canvas').style.display = 'block'; document.getElementById('result-canvas').classList.remove('hidden');
                 document.getElementById('loader-overlay').classList.add('hidden');
-                throw new Error(`Fiducial Gagal: Kiri (${leftSide.length}), Kanan (${rightSide.length}). Gunakan tombol "Jepret Manual" sambil memposisikan LJK pas dengan bingkai layar.`);
+                throw new Error(`Fiducial Gagal: Kiri (${leftSide.length}), Kanan (${rightSide.length}). Pastikan sudut LJK masuk semua di layar.`);
             }
 
             logAI(`Meratakan OMR...`);
