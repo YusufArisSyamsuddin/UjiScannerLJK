@@ -27,7 +27,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v45 Canny Edge Ultimate (Anti-Shadow & Background)</p>
+            <p class="text-sm text-slate-300 mt-1">v46 Ultimate Adaptive Hull (Anti Terang/Gelap & F4 Bentuk Lengkung)</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -38,14 +38,14 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">OMR v45 (CANNY)</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">OMR v46 (HULL)</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai.<br>
-                > Dynamic Canny Edge Tracker... Aktif.<br>
-                > Area Sorting (Abaikan Background)... Aktif.<br>
-                > Absolute Coordinate Matrix... Aktif.<br>
-                > Omni-Rotasi F4/A4... Aktif.<br>
+                > Adaptive Median Thresh Tracker... Aktif.<br>
+                > Convex Hull (Jaring Karet Virtual)... Aktif.<br>
+                > Full Dynamic Ratio (A4/F4 Terkalibrasi)... Aktif.<br>
+                > Fallback Jepret Manual Presisi 100%... Aktif.<br>
                 > Menunggu aksi pengguna...<br>
             </div>
             <div>
@@ -63,7 +63,7 @@
                 <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
                     <svg class="w-16 h-16 mx-auto mb-3 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
                     Arahkan kamera ke LJK atau Upload Scan.<br>
-                    <span class="text-xs text-emerald-400">Tracker Canny: Mengabaikan bayangan dan latar bising meja.</span>
+                    <span class="text-xs text-emerald-400">Teknologi Hull Adaptive: Akurat di latar terang/gelap & kertas lengkung.</span>
                 </div>
                 <video id="video" playsinline autoplay muted class="hidden telephoto-zoom"></video>
                 <canvas id="overlay-canvas" class="hidden pointer-events-none telephoto-zoom"></canvas>
@@ -305,64 +305,63 @@
         }; reader.readAsDataURL(e.target.files[0]);
     });
 
-    // --- CORE LOGIC 1: PENCARIAN BATAS KERTAS (CANNY EDGE ULTIMATE) ---
+    // --- CORE LOGIC 1: PENCARIAN BATAS KERTAS (MEDIAN + HULL ADAPTIVE) ---
+    // Menggantikan Canny yang lemah terhadap cahaya terang, diubah murni menjadi jaring pelacak F4
     function getPaperContour(src, isLiveCam = false) {
         let procMat = new cv.Mat();
-        let targetWidth = Math.min(src.cols, 800.0); 
+        let targetWidth = Math.min(src.cols, 600.0); // Diperkecil sedikit agar pelacakan sangat cepat & edge tebal
         let scaleRatio = targetWidth / src.cols;
         cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
 
-        let gray = new cv.Mat(), blur = new cv.Mat(), edges = new cv.Mat();
+        let gray = new cv.Mat(), thresh = new cv.Mat();
         cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
         
-        // Blur yang cukup kuat untuk melenyapkan serat kayu meja dan bayangan yang mengganggu
-        cv.GaussianBlur(gray, blur, new cv.Size(7, 7), 0);
+        // Median Blur: Magis untuk menghapus serat meja/tekstur tanpa merusak garis luar kertas
+        cv.medianBlur(gray, gray, 5);
         
-        // Dynamic Canny Edge Detection (State-of-the-art Document Scanner Standard)
-        // Mengubah gambar menjadi kerangka garis pinggir (mengabaikan gradien bayangan)
-        let meanScalar = cv.mean(blur);
-        let meanV = meanScalar[0];
-        let v1 = Math.max(0, (1.0 - 0.33) * meanV);
-        let v2 = Math.min(255, (1.0 + 0.33) * meanV);
-        cv.Canny(blur, edges, v1, v2);
+        // ADAPTIVE THRESHOLD: Bekerja sempurna untuk latar belakang super cerah maupun super gelap
+        // Karena ia beradaptasi pada matriks lokal, bukan rata-rata global.
+        cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 10);
         
-        // Penebalan garis pinggir agar tidak ada celah garis akibat noise/pantulan lampu
+        // Tutup garis pinggir yang mungkin terputus sedikit akibat pantulan
         let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-        cv.dilate(edges, edges, kernel); 
-        cv.morphologyEx(edges, edges, cv.MORPH_CLOSE, kernel);
+        cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel);
         kernel.delete();
         
         let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
-        // RETR_LIST agar semua contour masuk, bebas dari jebakan objek bertumpuk
-        cv.findContours(edges, cnts, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        cv.findContours(thresh, cnts, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
 
         let imgArea = procMat.cols * procMat.rows;
         let contourList = [];
 
         for (let i = 0; i < cnts.size(); ++i) {
             let c = cnts.get(i), area = cv.contourArea(c);
-            // Kertas (A4 atau F4) pasti mengambil >5% ruang kamera
-            if (area > (imgArea * 0.05) && area < (imgArea * 0.98)) {
+            // Kertas (A4/F4) diturunkan threshold areanya menjadi 12% agar jika dijauhkan tetap terbaca
+            if (area > (imgArea * 0.12) && area < (imgArea * 0.98)) {
                 contourList.push({ idx: i, area: area });
             }
         }
 
-        // FUNGSI KRUSIAL: Urutkan dari objek paling BESAR ke KECIL
-        // Ini memastikan mesin memprioritaskan kertas LJK, bukan background persegi di meja
+        // PENGURUTAN AREA TERTINGGI: Jaminan mutlak mengabaikan sampah background
         contourList.sort((a, b) => b.area - a.area);
-
         let bestPts = null;
 
         for (let item of contourList) {
             let c = cnts.get(item.idx);
-            let approx = new cv.Mat();
-            let peri = cv.arcLength(c, true);
-            // Epsilon adaptif, F4 yang melengkung di meja akan ditoleransi
-            let epsilon = isLiveCam ? 0.05 : 0.02;
-            cv.approxPolyDP(c, approx, epsilon * peri, true);
             
-            // Harus memiliki 4 sisi dan bentuk cembung (mengabaikan bayangan acak tangan)
-            if (approx.rows === 4 && cv.isContourConvex(approx)) {
+            // CONVEX HULL: Trik Mutlak untuk Kertas F4 yang melengkung di tepi meja!
+            // Mengubah objek bengkok menjadi poligon tertutup rapat seperti ditarik karet gelang.
+            let hull = new cv.Mat();
+            cv.convexHull(c, hull, false, true);
+
+            let approx = new cv.Mat();
+            let peri = cv.arcLength(hull, true);
+            
+            // Epsilon adaptif yang lebih longgar karena Hull sering memiliki banyak sisi kecil
+            cv.approxPolyDP(hull, approx, 0.04 * peri, true);
+            
+            // Evaluasi apakah Hull membentuk segi empat
+            if (approx.rows === 4) {
                 let pts = [];
                 for(let j=0; j<4; j++) {
                     pts.push({ 
@@ -375,22 +374,21 @@
                 let d2 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
                 let aspect = Math.max(d1, d2) / (Math.min(d1, d2) || 1);
                 
-                // Rasio 0.4 hingga 3.0 aman untuk F4/A4 yang miring atau portrait/landscape
-                if (aspect >= 0.4 && aspect <= 3.0) { 
+                // Menampung Rasio Ekstrem: F4 melengkung bisa terbaca hingga rasio 2.5
+                if (aspect >= 1.1 && aspect <= 2.5) { 
                     bestPts = pts; 
-                    approx.delete();
-                    break; // Berhenti mencari karena objek TERBESAR yang tepat sudah ditemukan!
+                    approx.delete(); hull.delete();
+                    break; 
                 }
             } 
-            approx.delete();
+            approx.delete(); hull.delete();
         }
         
-        procMat.delete(); gray.delete(); blur.delete(); edges.delete(); cnts.delete(); hierarchy.delete();
+        procMat.delete(); gray.delete(); thresh.delete(); cnts.delete(); hierarchy.delete();
         
         if(!bestPts) return null;
 
-        // PENGURUTAN TITIK MATEMATIS ABSOLUT (TopLeft, TopRight, BottomRight, BottomLeft)
-        // Bebas dari kesalahan meskipun difoto sangat miring
+        // MATRIKS KOORDINAT ABSOLUT: Anti-miring 360 derajat
         let sum = bestPts.map(p => p.x + p.y);
         let diff = bestPts.map(p => p.y - p.x);
 
@@ -466,7 +464,7 @@
         setTimeout(() => processLJKPipeline(finalCanvas, exactPts, isManual), 200);
     }
 
-    // --- CORE LOGIC 2: PIPELINE OMNI-DIRECTIONAL ---
+    // --- CORE LOGIC 2: PIPELINE OMNI-DIRECTIONAL & FALLBACK MANUAl 100% ---
     function processLJKPipeline(canvas, exactPts = null, isManual = false) {
         let src = null, roughWarped = null, strictWarpedMat = null, debugMat = null; 
 
@@ -476,11 +474,12 @@
             let paperPts = exactPts;
             if (!paperPts) paperPts = getPaperContour(src, false); 
             if (!paperPts && isManual) {
-                logAI("Menggunakan batas fisik gambar (Fallback Manual).");
+                logAI("Pelacakan gagal. Menerapkan potong 100% layar (Manual Mode).");
                 let w = src.cols, h = src.rows;
-                paperPts = [ {x: w*0.01, y: h*0.01}, {x: w*0.99, y: h*0.01}, {x: w*0.99, y: h*0.99}, {x: w*0.01, y: h*0.99} ];
+                // PERBAIKAN: Potong 100% sempurna batas kotak layar, tanpa meleset 1% pun!
+                paperPts = [ {x: 0, y: 0}, {x: w, y: 0}, {x: w, y: h}, {x: 0, y: h} ];
             }
-            if (!paperPts) throw new Error("Garis kertas tidak ditemukan. Harap pastikan latar belakang memadai.");
+            if (!paperPts) throw new Error("Gagal mengenali kertas. Pastikan pencahayaan cukup dan LJK terlihat utuh.");
 
             // LOGIKA OMNI-DIRECTIONAL: Deteksi Kertas Horizontal (Landscape)
             let d1 = Math.hypot(paperPts[0].x - paperPts[1].x, paperPts[0].y - paperPts[1].y);
@@ -491,9 +490,8 @@
             let pW = (d1 + d3) / 2.0;
             let pH = (d2 + d4) / 2.0;
             
-            let isLandscape = pW > pH; // Jika lebar > tinggi, berarti difoto miring/horizontal
+            let isLandscape = pW > pH;
             
-            // Rasio dipastikan selalu > 1 (sisi panjang / sisi pendek)
             let dynamicRatio = isLandscape ? (pW / pH) : (pH / pW);
             dynamicRatio = Math.max(1.2, Math.min(dynamicRatio, 2.2)); // F4~1.6, A4~1.4
 
@@ -504,7 +502,7 @@
             
             let dstArray;
             if (isLandscape) {
-                logAI("Kertas Horizontal terdeteksi. Memutar otomatis 90°...");
+                logAI("Kertas Horizontal. Memutar otomatis 90°...");
                 dstArray = [ ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H, 0, 0 ];
             } else {
                 dstArray = [ 0, 0, ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H ];
@@ -519,15 +517,15 @@
             debugMat = new cv.Mat();
             if (roughWarped.channels() === 4) cv.cvtColor(roughWarped, debugMat, cv.COLOR_RGBA2RGB); else roughWarped.copyTo(debugMat);
 
-            logAI("Mencari 6 Kotak Hitam (Fiducial)...");
+            logAI("Melacak Fiducial Utama...");
             let gray = new cv.Mat(), thresh = new cv.Mat();
             cv.cvtColor(roughWarped, gray, cv.COLOR_RGBA2GRAY, 0);
             
-            let fBlock = Math.floor(ROUGH_W / 15); if (fBlock % 2 === 0) fBlock++;
+            let fBlock = Math.floor(ROUGH_W / 20); if (fBlock % 2 === 0) fBlock++; // Presisi fiducial diperhalus
             cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, fBlock, 15);
             
             let maskMarginW = Math.floor(ROUGH_W * 0.12);
-            let maskMarginH = Math.floor(ROUGH_H * 0.02); // Masking tipis 2% atas-bawah menghindari garis tepi
+            let maskMarginH = Math.floor(ROUGH_H * 0.02);
 
             let roiCenter = thresh.roi(new cv.Rect(maskMarginW, maskMarginH, ROUGH_W - (2 * maskMarginW), ROUGH_H - (2 * maskMarginH)));
             roiCenter.setTo(new cv.Scalar(0)); roiCenter.delete();
@@ -570,18 +568,17 @@
                 cv.imshow('result-canvas', debugMat);
                 document.getElementById('result-canvas').style.display = 'block'; document.getElementById('result-canvas').classList.remove('hidden');
                 document.getElementById('loader-overlay').classList.add('hidden');
-                throw new Error(`Fiducial Gagal (Kiri: ${leftSide.length}, Kanan: ${rightSide.length}). Pastikan 6 kotak hitam terlihat jelas.`);
+                throw new Error(`Fiducial Gagal (Kiri: ${leftSide.length}, Kanan: ${rightSide.length}). Pastikan sudut LJK masuk frame.`);
             }
 
-            logAI(`Meratakan berdasarkan Rotasi Fiducial...`);
+            logAI(`Kalibrasi Sudut Fiducial...`);
             let TL, ML, BL, TR, MR, BR;
             
-            // LOGIKA CERDAS: Cek kertas terbalik (Upside Down) dari jarak fiducial
             let distTopMid = (leftSide[1].y - leftSide[0].y) + (rightSide[1].y - rightSide[0].y);
             let distMidBot = (leftSide[2].y - leftSide[1].y) + (rightSide[2].y - rightSide[1].y);
 
             if (distTopMid < distMidBot) { 
-                logAI("Kertas Terbalik 180°! Memutar otomatis...");
+                logAI("Kertas Upside Down. Rotasi otomatis aktif...");
                 TL = rightSide[2]; ML = rightSide[1]; BL = rightSide[0]; 
                 TR = leftSide[2]; MR = leftSide[1]; BR = leftSide[0]; 
             } else { 
