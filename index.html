@@ -14,8 +14,8 @@
         .modal { transition: opacity 0.25s ease; }
         body.modal-active { overflow: hidden; }
         #video-container { position: relative; width: 100%; height: 100%; min-height: 500px; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 0.5rem; }
-        /* Perbesaran 2.0x untuk presisi bidik luar biasa */
-        .telephoto-zoom { transform: scale(2.0); transform-origin: center; transition: transform 0.3s ease; }
+        /* Perbesaran 2.0x & Object-Fit Cover untuk Layar Penuh Bebas Bar Hitam */
+        .telephoto-zoom { transform: scale(2.0); transform-origin: center; transition: transform 0.3s ease; object-fit: cover !important; }
         #video, #overlay-canvas, #result-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
         #result-canvas { z-index: 40; }
         #overlay-canvas { z-index: 30; }
@@ -28,7 +28,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v47.5 Line-in-White Logic (2.0x Zoom & Ultra Sync)</p>
+            <p class="text-sm text-slate-300 mt-1">v47.6 Dual-Stage Vision (Paper -> Line) & Math-Sync Crop</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -39,14 +39,14 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v47.5 Professional</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v47.6 Ultimate</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai.<br>
-                > Bug 'cy undefined'... Fixed.<br>
-                > Sinkronisasi Universal Zoom 2.0x... Aktif.<br>
-                > Logika "Line-in-White" (Anti Meja Gelap)... Aktif.<br>
-                > Throttling CPU (10 FPS)... Aktif.<br>
+                > Rumus Crop Layar Sinkron... Siap.<br>
+                > Vision Tahap 1: Deteksi Kertas... Aktif.<br>
+                > Vision Tahap 2: Masking & Deteksi Garis... Aktif.<br>
+                > Throttling CPU Stabilizer... Aktif.<br>
                 > Menunggu aksi pengguna...<br>
             </div>
             <div>
@@ -212,7 +212,7 @@
 
     let resultData = [], scanCounter = 1, smoothedMarkers = null, videoScanLoop = null;
     let autoCaptureLockCount = 0, trackerLostFrames = 0; 
-    const AUTO_CAPTURE_THRESHOLD = 10;
+    const AUTO_CAPTURE_THRESHOLD = 8; // Dikurangi dari 10 menjadi 8 untuk auto-capture lebih sigap
     let pendingUpdateData = null, pendingUpdateIndex = -1, pendingDeleteId = null;
 
     const video = document.getElementById('video'), overlayCanvas = document.getElementById('overlay-canvas');
@@ -286,7 +286,7 @@
 
     document.getElementById('btn-manual-capture').addEventListener('click', () => {
         if (!video.paused && !video.ended) {
-            logAI("Jepret Manual dipicu. Melakukan Crop Sinkron 2.0x...");
+            logAI("Jepret Manual dipicu. Memotong sesuai WYSIWYG...");
             if (videoScanLoop) cancelAnimationFrame(videoScanLoop);
             executeCapture(true);
         }
@@ -306,74 +306,111 @@
         }; reader.readAsDataURL(e.target.files[0]);
     });
 
-    // --- LOGIKA MURNI BAPAK: MENCARI GARIS TERCETAK DI DALAM AREA PUTIH ---
+    // --- LOGIKA CERDAS: DUAL-STAGE VISION (CARI KERTAS DULU, LALU CARI GARIS) ---
     function getPaperContour(src) {
         let procMat = new cv.Mat();
         let targetWidth = 800.0; 
         let scaleRatio = targetWidth / src.cols;
         cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
 
-        let gray = new cv.Mat(), blur = new cv.Mat(), thresh = new cv.Mat();
+        let gray = new cv.Mat(), blur = new cv.Mat();
         cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
         
-        // Blur sedang untuk meredam tekstur meja atau kertas, tapi menjaga garis batas LJK tetap utuh
+        // TAHAP 1: MENCARI KERTAS (Kertas putih memantulkan cahaya lebih kuat)
         cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+        let paperThresh = new cv.Mat();
+        // Otsu Threshold memisahkan secara drastis objek putih dominan (kertas) dari area gelap (meja/tripod)
+        cv.threshold(blur, paperThresh, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
         
-        // RAHASIA LOGIKANYA DI SINI: Block Size kecil (41) agar Thresholding 
-        // hanya bereaksi pada "Garis Hitam yang dikelilingi Putih (Kertas)". 
-        // Bayangan besar atau meja gelap tidak akan terbaca sebagai garis karena diblokir oleh Block Size ini.
-        let blockSize = 41; 
-        cv.adaptiveThreshold(blur, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, blockSize, 10);
-        
-        // Morphological Close: Menyambung garis-garis batas LJK yang mungkin putus akibat kualitas cetak/kamera
-        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-        cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel);
-        cv.dilate(thresh, thresh, kernel);
-        kernel.delete();
-        
+        // Morfologi untuk menutup tulisan/soal di dalam kertas menjadi satu blok utuh
+        let kernelBesar = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9, 9));
+        cv.morphologyEx(paperThresh, paperThresh, cv.MORPH_CLOSE, kernelBesar);
+
         let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
-        // MENGGUNAKAN RETR_LIST: Cari SEMUA kontur tanpa terkecuali, diabaikan apakah dia ada di pinggir meja atau di dalam.
-        cv.findContours(thresh, cnts, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        cv.findContours(paperThresh, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-        let maxArea = 0, bestPts = null, imgArea = procMat.cols * procMat.rows;
+        let maxPaperArea = 0, paperContourIdx = -1;
+        let imgArea = procMat.cols * procMat.rows;
 
+        // Mencari kertas terbesar (Minimal 15% dari frame kamera)
         for (let i = 0; i < cnts.size(); ++i) {
-            let c = cnts.get(i), area = cv.contourArea(c);
-            
-            // Garis pembatas (Frame cetak LJK) ukurannya pasti mendominasi LJK (minimal 15% dari layar)
-            if (area > (imgArea * 0.15) && area < (imgArea * 0.98)) {
-                let approx = new cv.Mat();
-                // Epsilon ketat: Memastikan kontur yang dipilih BENAR-BENAR berbentuk SEGI EMPAT LURUS (bukan acak)
-                cv.approxPolyDP(c, approx, 0.02 * cv.arcLength(c, true), true);
-                
-                if (approx.rows === 4) {
-                    let pts = [];
-                    for(let j=0; j<4; j++) {
-                        pts.push({ 
-                            x: Math.round(approx.data32S[j*2] / scaleRatio), 
-                            y: Math.round(approx.data32S[j*2+1] / scaleRatio) 
-                        });
-                    }
-                    
-                    let d1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-                    let d2 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
-                    let aspect = Math.max(d1, d2) / (Math.min(d1, d2) || 1);
-                    
-                    // Rentang rasio kotak hitam cetakan LJK A4/F4 (Vertikal maupun Horizontal)
-                    if (aspect >= 1.1 && aspect <= 2.2 && area > maxArea) { 
-                        maxArea = area; bestPts = pts; 
-                    }
-                } approx.delete();
+            let area = cv.contourArea(cnts.get(i));
+            if (area > imgArea * 0.15 && area > maxPaperArea) {
+                maxPaperArea = area; paperContourIdx = i;
             }
         }
-        
-        procMat.delete(); gray.delete(); blur.delete(); thresh.delete(); cnts.delete(); hierarchy.delete();
-        if(!bestPts) return null;
 
-        // Sorting Sudut: Kiri Atas -> Kanan Atas -> Kanan Bawah -> Kiri Bawah
-        let sum = bestPts.map(p => p.x + p.y), diff = bestPts.map(p => p.y - p.x);
-        let tl = bestPts[sum.indexOf(Math.min(...sum))], br = bestPts[sum.indexOf(Math.max(...sum))];
-        let tr = bestPts[diff.indexOf(Math.min(...diff))], bl = bestPts[diff.indexOf(Math.max(...diff))];
+        let bestLinePts = null;
+
+        // JIKA KERTAS DITEMUKAN, MAKA...
+        if (paperContourIdx !== -1) {
+            // TAHAP 2: MASKING & CARI GARIS DI DALAM KERTAS
+            // Buat topeng (mask) seukuran kertas untuk menghapus meja/tripod dari pandangan AI
+            let mask = new cv.Mat.zeros(procMat.rows, procMat.cols, cv.CV_8UC1);
+            let color = new cv.Scalar(255);
+            cv.drawContours(mask, cnts, paperContourIdx, color, -1, cv.LINE_8, hierarchy, 0);
+
+            // Terapkan topeng pada gambar Grayscale asli
+            let maskedGray = new cv.Mat();
+            gray.copyTo(maskedGray, mask);
+
+            let lineThresh = new cv.Mat();
+            // Adaptive threshold kecil untuk menonjolkan TINTA HITAM di atas KERTAS PUTIH
+            cv.adaptiveThreshold(maskedGray, lineThresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
+
+            // Bersihkan sisa-sisa noise di area luar kertas (Pastikan 100% bersih)
+            let invMask = new cv.Mat();
+            cv.bitwise_not(mask, invMask);
+            lineThresh.setTo(new cv.Scalar(0), invMask); 
+            
+            let kernelKecil = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+            cv.dilate(lineThresh, lineThresh, kernelKecil); 
+
+            let lineCnts = new cv.MatVector(), lineHierarchy = new cv.Mat();
+            cv.findContours(lineThresh, lineCnts, lineHierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+            let maxLineArea = 0;
+            // Cari kontur kotak hitam terbesar yang murni berada DI DALAM kertas
+            for (let i = 0; i < lineCnts.size(); ++i) {
+                let c = lineCnts.get(i);
+                let area = cv.contourArea(c);
+
+                // Kotak cetakan biasanya menutupi 50%-98% area kertas LJK
+                if (area > maxPaperArea * 0.50 && area < maxPaperArea * 0.98) {
+                    let approx = new cv.Mat();
+                    cv.approxPolyDP(c, approx, 0.02 * cv.arcLength(c, true), true);
+
+                    if (approx.rows === 4) {
+                        let pts = [];
+                        for(let j=0; j<4; j++) {
+                            pts.push({ 
+                                x: Math.round(approx.data32S[j*2] / scaleRatio), 
+                                y: Math.round(approx.data32S[j*2+1] / scaleRatio) 
+                            });
+                        }
+                        
+                        let d1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+                        let d2 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
+                        let aspect = Math.max(d1, d2) / (Math.min(d1, d2) || 1);
+
+                        if (aspect >= 1.1 && aspect <= 2.2 && area > maxLineArea) {
+                            maxLineArea = area; bestLinePts = pts;
+                        }
+                    } approx.delete();
+                }
+            }
+            mask.delete(); maskedGray.delete(); lineThresh.delete(); invMask.delete(); kernelKecil.delete();
+            lineCnts.delete(); lineHierarchy.delete();
+        }
+
+        procMat.delete(); gray.delete(); blur.delete(); paperThresh.delete(); kernelBesar.delete();
+        cnts.delete(); hierarchy.delete();
+
+        if (!bestLinePts) return null;
+
+        let sum = bestLinePts.map(p => p.x + p.y), diff = bestLinePts.map(p => p.y - p.x);
+        let tl = bestLinePts[sum.indexOf(Math.min(...sum))], br = bestLinePts[sum.indexOf(Math.max(...sum))];
+        let tr = bestLinePts[diff.indexOf(Math.min(...diff))], bl = bestLinePts[diff.indexOf(Math.max(...diff))];
         return [tl, tr, br, bl];
     }
 
@@ -397,12 +434,13 @@
                         let frame = { tl: paperPts[0], tr: paperPts[1], br: paperPts[2], bl: paperPts[3] };
                         if (!smoothedMarkers) { smoothedMarkers = frame; autoCaptureLockCount = 0; } 
                         else {
-                            ['tl', 'tr', 'br', 'bl'].forEach(k => { smoothedMarkers[k].x = smoothedMarkers[k].x * 0.6 + frame[k].x * 0.4; smoothedMarkers[k].y = smoothedMarkers[k].y * 0.6 + frame[k].y * 0.4; });
+                            // Stabilisasi agar toleran dengan getaran mikro pada tripod
+                            ['tl', 'tr', 'br', 'bl'].forEach(k => { smoothedMarkers[k].x = smoothedMarkers[k].x * 0.7 + frame[k].x * 0.3; smoothedMarkers[k].y = smoothedMarkers[k].y * 0.7 + frame[k].y * 0.3; });
                             autoCaptureLockCount++;
                         }
                     } else {
                         trackerLostFrames++;
-                        if (trackerLostFrames > 5) { autoCaptureLockCount = 0; smoothedMarkers = null; scanStatus.innerText = "Mencari Garis Pembatas LJK..."; }
+                        if (trackerLostFrames > 5) { autoCaptureLockCount = 0; smoothedMarkers = null; scanStatus.innerText = "Mencari Kertas..."; }
                     }
 
                     if (smoothedMarkers) {
@@ -417,25 +455,42 @@
         } loop(0);
     }
 
-    // --- PERBAIKAN: SINKRONISASI JEPRET MANUAL 2.0x (WYSIWYG 100%) ---
+    // --- PERBAIKAN MATEMATIKA: 100% WYSIWYG CROP SINKRONISASI ---
     function executeCapture(isManual = false) {
         let captureCanvas = document.createElement('canvas');
         let finalCanvas = captureCanvas; 
         let exactPts = null;
 
         if (isManual) {
-            // Perbesaran 2.0x Sinkron Universal:
-            // Mengambil area crop persis 50% dari tengah gambar sensor mentah (1920x1080 / 2)
-            // Ini menjamin hasil jepret manual tidak akan pernah meleset dari apa yang Bapak lihat.
+            let container = document.getElementById('video-container');
+            let cw = container.clientWidth;
+            let ch = container.clientHeight;
+            let vw = video.videoWidth;
+            let vh = video.videoHeight;
             let zoom = 2.0;
-            let sw = video.videoWidth / zoom;
-            let sh = video.videoHeight / zoom;
-            let sx = (video.videoWidth - sw) / 2;
-            let sy = (video.videoHeight - sh) / 2;
 
-            captureCanvas.width = sw; 
-            captureCanvas.height = sh;
-            captureCanvas.getContext('2d').drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+            // Karena video memakai 'object-fit: cover', hitung rasio pembesaran aslinya
+            let scaleCover = Math.max(cw / vw, ch / vh);
+
+            // Hitung lebar & tinggi total video di layar jika tidak di-crop oleh container
+            let renderedW = vw * scaleCover * zoom;
+            let renderedH = vh * scaleCover * zoom;
+
+            // Berapa porsi (%) dari video asli yang terlihat menembus kotak container?
+            let visibleRatioW = cw / renderedW;
+            let visibleRatioH = ch / renderedH;
+
+            // Aplikasikan porsi tersebut pada koordinat video sensor asli
+            let cropW = vw * visibleRatioW;
+            let cropH = vh * visibleRatioH;
+            
+            // Pusatkan cropping di tengah sensor
+            let cropX = (vw - cropW) / 2;
+            let cropY = (vh - cropH) / 2;
+
+            captureCanvas.width = cropW; 
+            captureCanvas.height = cropH;
+            captureCanvas.getContext('2d').drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
         } else {
             captureCanvas.width = video.videoWidth; 
             captureCanvas.height = video.videoHeight;
@@ -647,7 +702,6 @@
             let col = map.c + c, opts = [];
             for(let r=0; r<map.h; r++) {
                 let cell = grid[map.r + map.skipRow + r][col];
-                // BUG FIXED: cy: cy dirubah menjadi cy: cell.cy
                 opts.push({ v: vals[r] || '', d: cell.density, area: cell.area, cx: cell.cx, cy: cell.cy });
             } res.push(evaluateCellGroup(opts, ctx, null));
         } return res.join('').trim() || "-";
