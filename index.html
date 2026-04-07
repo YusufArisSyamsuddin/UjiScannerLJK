@@ -27,7 +27,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v47.9 The Ultimate Weapon (Anti Lantai Cerah, Auto-Flip 180°, Fast Tracker)</p>
+            <p class="text-sm text-slate-300 mt-1">v48.0 Revolution (Centroid Angular Sort & Zero-Delay Tracker)</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -38,13 +38,13 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v47.9 PAMUNGKAS</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v48.0 OMNI</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai.<br>
-                > Mesin Pemindai 3-Lapis (Anti Lantai Cerah)... Siap.<br>
-                > Deteksi Miring & Terbalik (Auto-Flip 180°)... Aktif.<br>
-                > Lightweight Fast Tracker (Zero Delay)... Aktif.<br>
+                > Atan2 Centroid Sorting... Aktif (Bebas Miring 360°).<br>
+                > Lightweight Tracker (300px)... Aktif (Cepat & Jauh).<br>
+                > Algoritma Upload & Jepret Multi-Pass... Siap.<br>
                 > Menunggu aksi pengguna...<br>
             </div>
             <div>
@@ -71,7 +71,7 @@
                 <!-- Desain Tombol Jepret Manual Profesional Baru -->
                 <button id="btn-manual-capture" class="hidden absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-slate-900 text-white px-8 py-4 rounded-full font-black tracking-widest shadow-[0_0_20px_rgba(16,185,129,0.4)] z-50 border-2 border-emerald-500 hover:bg-slate-800 transition-all active:scale-95 flex items-center gap-3">
                     <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><circle cx="12" cy="13" r="4" stroke="currentColor" stroke-width="2"></circle></svg>
-                    PINDAI
+                    PEMINDAIAN PRESISI
                 </button>
 
                 <div id="loader-overlay" class="absolute inset-0 bg-slate-900/95 hidden flex-col justify-center items-center z-50 backdrop-blur-sm">
@@ -306,13 +306,11 @@
     });
 
     // =================================================================================
-    // THE ULTIMATE WEAPON: PENCARI GARIS (ANTI LANTAI CERAH & ANTI BAYANGAN)
+    // THE ULTIMATE WEAPON (Upload & Manual)
     // =================================================================================
-    // Fungsi ini mengevaluasi gambar menggunakan berbagai metode (Multi-Pass) dan 
-    // memberi "skor" pada setiap kotak yang ditemukan untuk menjamin akurasi mutlak.
-    function getUltimatePaperContour(src, isExhaustive = true) {
+    function getUltimatePaperContour(src) {
         let procMat = new cv.Mat();
-        let targetWidth = isExhaustive ? 1000.0 : 400.0; // Tracker video pakai resolusi rendah agar 60 FPS
+        let targetWidth = 1000.0; // Resolusi Tinggi untuk keakuratan
         let scaleRatio = targetWidth / src.cols;
         cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
 
@@ -323,7 +321,6 @@
         let imgArea = procMat.cols * procMat.rows;
         let cx = procMat.cols / 2, cy = procMat.rows / 2;
 
-        // Evaluator: Memberi skor pada bentuk poligon 4 sisi
         function evaluateAndSaveQuad(pts) {
             let d1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
             let d2 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
@@ -334,12 +331,11 @@
             let aspect = Math.max(w, h) / (Math.min(w, h) || 1);
             let area = w * h;
 
-            // Kriteria Utama LJK
-            if (area > (imgArea * 0.15) && area < (imgArea * 0.98) && aspect >= 1.2 && aspect <= 1.8) {
-                // Skor dihitung dari Luas Area (prioritas) dan seberapa dekat dengan tengah layar
+            // Batas Toleransi Dilonggarkan: Terima area > 5% dan rasio bebas hingga 2.2
+            if (area > (imgArea * 0.05) && area < (imgArea * 0.99) && aspect >= 1.0 && aspect <= 2.2) {
                 let polyCenter = { x: (pts[0].x + pts[2].x)/2, y: (pts[0].y + pts[2].y)/2 };
                 let distToCenter = Math.hypot(polyCenter.x - cx, polyCenter.y - cy);
-                let score = area - (distToCenter * 50); // Penalti jika jauh dari tengah
+                let score = area - (distToCenter * 10); 
                 
                 if (score > bestScore) {
                     bestScore = score;
@@ -348,14 +344,14 @@
             }
         }
 
-        // Sub-fungsi ekstraksi poligon dari Mat Threshold
         function extractQuads(threshMat) {
             let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
             cv.findContours(threshMat, cnts, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
             for (let i = 0; i < cnts.size(); ++i) {
                 let c = cnts.get(i);
                 let approx = new cv.Mat();
-                cv.approxPolyDP(c, approx, 0.02 * cv.arcLength(c, true), true);
+                // Epsilon dilonggarkan menjadi 0.025 agar tahan pinggiran bergerigi akibat rotasi
+                cv.approxPolyDP(c, approx, 0.025 * cv.arcLength(c, true), true); 
                 if (approx.rows === 4 && cv.isContourConvex(approx)) {
                     let pts = [];
                     for(let j=0; j<4; j++) pts.push({ x: approx.data32S[j*2], y: approx.data32S[j*2+1] });
@@ -366,66 +362,127 @@
             cnts.delete(); hierarchy.delete();
         }
 
-        // STRATEGI 1: Canny Edge (Sangat Kuat Melawan Lantai Cerah menyatu dengan Kertas Putih)
+        // 3 Taktik Berturut-turut untuk memastikan akurasi mutlak
         let blur = new cv.Mat(), edges = new cv.Mat(), dilated = new cv.Mat();
         cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-        cv.Canny(blur, edges, 40, 120);
-        let kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+        
+        cv.Canny(blur, edges, 30, 100);
+        let kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
         cv.dilate(edges, dilated, kernel1);
         extractQuads(dilated);
 
-        // JIKA EXHAUSTIVE (Mode Upload/Jepret), gunakan semua taktik berat:
-        if (isExhaustive && !bestPts) {
-            // STRATEGI 2: Morphological Gradient (Menyorot batas tebal Tinta vs Kertas, Anti Bayangan Tripod)
+        if (!bestPts) {
             let grad = new cv.Mat(), gradThresh = new cv.Mat();
-            let kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(7, 7));
+            let kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
             cv.morphologyEx(gray, grad, cv.MORPH_GRADIENT, kernel2);
             cv.threshold(grad, gradThresh, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
             extractQuads(gradThresh);
             grad.delete(); gradThresh.delete(); kernel2.delete();
-
-            // STRATEGI 3: Adaptive Threshold Klasik (Terbaik untuk LJK mulus yang di-scan alat flatbed)
-            if (!bestPts) {
-                let adThresh = new cv.Mat();
-                cv.adaptiveThreshold(blur, adThresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
-                extractQuads(adThresh);
-                adThresh.delete();
-            }
         }
 
-        // Pembersihan Memori Ekstra Ketat
+        if (!bestPts) {
+            let adThresh = new cv.Mat();
+            cv.adaptiveThreshold(blur, adThresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 61, 15);
+            extractQuads(adThresh);
+            adThresh.delete();
+        }
+
         procMat.delete(); gray.delete(); blur.delete(); edges.delete(); dilated.delete(); kernel1.delete();
         
         if(!bestPts) return null;
 
-        // Sorting Sudut (Kiri-Atas searah jarum jam secara matematis mutlak)
-        let sum = bestPts.map(p => p.x + p.y), diff = bestPts.map(p => p.y - p.x);
-        let tl = bestPts[sum.indexOf(Math.min(...sum))], br = bestPts[sum.indexOf(Math.max(...sum))];
-        let tr = bestPts[diff.indexOf(Math.min(...diff))], bl = bestPts[diff.indexOf(Math.max(...diff))];
-        return [tl, tr, br, bl];
+        // KUNCI SOLUSI BUG 45 DERAJAT: Matematika Centroid & Atan2
+        // Secara alami dan konsisten mengurutkan 4 titik memutar searah jarum jam
+        let centroidX = bestPts.reduce((sum, p) => sum + p.x, 0) / 4;
+        let centroidY = bestPts.reduce((sum, p) => sum + p.y, 0) / 4;
+        bestPts.sort((a, b) => Math.atan2(a.y - centroidY, a.x - centroidX) - Math.atan2(b.y - centroidY, b.x - centroidX));
+        
+        // Geser indeks agar titik yang paling mendekati sudut Kiri Atas (X+Y terkecil) berada di awal
+        let sumXY = bestPts.map(p => p.x + p.y);
+        let minIdx = sumXY.indexOf(Math.min(...sumXY));
+        
+        let sortedPts = [];
+        for(let i=0; i<4; i++) sortedPts.push(bestPts[(minIdx + i) % 4]);
+        
+        return sortedPts;
     }
 
     // =================================================================================
-    // TRACKER DARI NOL (FAST & LIGHTWEIGHT)
+    // NEW: LIGHTWEIGHT FAST TRACKER (Khusus untuk Mode Video - Zero Delay)
     // =================================================================================
+    function getFastTrackingContour(src) {
+        let procMat = new cv.Mat();
+        let targetWidth = 320.0; // Resolusi sangat kecil agar tidak lag (FPS Tinggi)
+        let scaleRatio = targetWidth / src.cols;
+        cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
+        
+        let gray = new cv.Mat(), thresh = new cv.Mat();
+        cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
+        
+        // Pemrosesan sesederhana mungkin (Hanya Canny Ringan)
+        cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+        cv.Canny(gray, thresh, 30, 100);
+        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+        cv.dilate(thresh, thresh, kernel);
+        
+        let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
+        cv.findContours(thresh, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE); // Hanya cari garis terluar
+        
+        let bestPts = null, maxArea = 0;
+        let imgArea = procMat.cols * procMat.rows;
+        
+        for(let i=0; i<cnts.size(); i++) {
+            let c = cnts.get(i);
+            let area = cv.contourArea(c);
+            // Toleransi ukuran jauh (8% dari layar)
+            if (area > imgArea * 0.08) {
+                let approx = new cv.Mat();
+                cv.approxPolyDP(c, approx, 0.035 * cv.arcLength(c, true), true); // Toleransi patahan garis ekstra
+                if (approx.rows === 4 && cv.isContourConvex(approx)) {
+                    if (area > maxArea) {
+                        maxArea = area;
+                        bestPts = [];
+                        for(let j=0; j<4; j++) bestPts.push({ x: approx.data32S[j*2] / scaleRatio, y: approx.data32S[j*2+1] / scaleRatio });
+                    }
+                }
+                approx.delete();
+            }
+        }
+        
+        procMat.delete(); gray.delete(); thresh.delete(); kernel.delete(); cnts.delete(); hierarchy.delete();
+        
+        if (!bestPts) return null;
+        
+        // Sorting Centroid Atan2 Cepat
+        let cx = bestPts.reduce((sum, p) => sum + p.x, 0) / 4;
+        let cy = bestPts.reduce((sum, p) => sum + p.y, 0) / 4;
+        bestPts.sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+        let sum = bestPts.map(p => p.x + p.y);
+        let minIdx = sum.indexOf(Math.min(...sum));
+        let sortedPts = [];
+        for(let i=0; i<4; i++) sortedPts.push(bestPts[(minIdx + i) % 4]);
+        
+        return sortedPts;
+    }
+
     function startStreamLoop() {
         if (videoScanLoop) cancelAnimationFrame(videoScanLoop);
         lastProcessTime = 0; trackerLostFrames = 0; autoCaptureLockCount = 0; smoothedMarkers = null;
 
         function loop(timestamp) {
             if (!video.paused && !video.ended) {
-                if (video.videoWidth === 0 || timestamp - lastProcessTime < 60) { // Limit ke ~15 FPS agar tidak panas
+                // Limit kecepatan ke ~15 FPS agar HP tidak panas, cukup ideal untuk pergerakan tangan
+                if (video.videoWidth === 0 || timestamp - lastProcessTime < 60) { 
                     videoScanLoop = requestAnimationFrame(loop); return; 
                 }
                 lastProcessTime = timestamp;
                 
                 try {
-                    // Tracker ini tidak lagi menggunakan canvas besar, langsung skala kecil untuk kecepatan ekstrim
                     hiddenCanvas.getContext('2d').drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                     let mat = cv.imread(hiddenCanvas);
                     
-                    // isExhaustive = false -> Tracker sangat ringan
-                    let paperPts = getUltimatePaperContour(mat, false); 
+                    // Gunakan Fast Tracker yang baru dibuat! Sangat ringan & cepat.
+                    let paperPts = getFastTrackingContour(mat); 
                     
                     let ctx = overlayCanvas.getContext('2d');
                     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
@@ -435,7 +492,7 @@
                         let frame = { tl: paperPts[0], tr: paperPts[1], br: paperPts[2], bl: paperPts[3] };
                         if (!smoothedMarkers) { smoothedMarkers = frame; autoCaptureLockCount = 0; } 
                         else {
-                            // Stabilisasi eksponensial (Halus saat bergetar dipegang tangan)
+                            // Stabilisasi eksponensial untuk meredam tremor tangan/tripod
                             ['tl', 'tr', 'br', 'bl'].forEach(k => { 
                                 smoothedMarkers[k].x = smoothedMarkers[k].x * 0.6 + frame[k].x * 0.4; 
                                 smoothedMarkers[k].y = smoothedMarkers[k].y * 0.6 + frame[k].y * 0.4; 
@@ -488,8 +545,8 @@
         
         resetUI(); document.getElementById('loader-overlay').classList.remove('hidden');
         
-        // Memaksa proses Pipeline mencari poligon ulang secara Exhaustive dari gambar HD (Tanpa melempar titik tracker)
-        setTimeout(() => processLJKPipeline(finalCanvas, null, true), 200);
+        // Memaksa proses Pipeline mencari poligon ulang secara Ultimate dari gambar HD (Tanpa melempar titik tracker)
+        setTimeout(() => processLJKPipeline(finalCanvas, null, isManual), 200);
     }
 
     // =================================================================================
@@ -499,7 +556,7 @@
         let src = null, roughWarped = null, strictWarpedMat = null, debugMat = null; 
         try {
             src = cv.imread(canvas);
-            let paperPts = exactPts || getUltimatePaperContour(src, true); 
+            let paperPts = exactPts || getUltimatePaperContour(src); 
             
             // Fallback Ultimate: Jika gambar sangat mepet batas sehingga tidak ada background sama sekali
             if (!paperPts) {
@@ -513,7 +570,7 @@
             let d4 = Math.hypot(paperPts[3].x - paperPts[0].x, paperPts[3].y - paperPts[0].y);
             
             let pW = (d1 + d3) / 2.0, pH = (d2 + d4) / 2.0;
-            // Deteksi Miring Horizontal
+            // Deteksi Miring Horizontal (Rotasi 90 Derajat otomatis ditangani di sini)
             let isLandscape = pW > pH;
             
             // Warp Kasar
