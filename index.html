@@ -27,7 +27,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v49.2 (Logic Conflict Resolved & Sync Tracker-to-Crop)</p>
+            <p class="text-sm text-slate-300 mt-1">v49.3 (Absolute Dual-Path Isolation & Sync Crop)</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -38,13 +38,14 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v49.2 STABLE</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v49.3 ISOLATED</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai.<br>
                 > Radius Fiducial Warped 12%... Presisi.<br>
-                > Resolusi Konflik Multi-Pass... Selesai.<br>
+                > Pemisahan Jalur Mutlak (Tracker vs Upload)... Selesai.<br>
                 > Direct Coordinate Handoff (Kamera ke Pemotong)... Aktif.<br>
+                > Senjata Rahasia Manual Multi-Pass... Dipulihkan penuh.<br>
                 > Menunggu aksi pengguna...<br>
             </div>
             <div>
@@ -62,7 +63,7 @@
                 <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
                     <svg class="w-16 h-16 mx-auto mb-3 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
                     Arahkan kamera ke LJK atau Upload Scan.<br>
-                    <span class="text-xs text-emerald-400">Mesin Split Stabil: Sinkronisasi Kamera & Pemotong Diperbaiki.</span>
+                    <span class="text-xs text-emerald-400">Jalur Terpisah Aktif: Kamera Stabil & Upload Presisi.</span>
                 </div>
                 <video id="video" playsinline autoplay muted class="hidden telephoto-zoom"></video>
                 <canvas id="overlay-canvas" class="hidden pointer-events-none telephoto-zoom"></canvas>
@@ -284,7 +285,7 @@
 
     document.getElementById('btn-manual-capture').addEventListener('click', () => {
         if (!video.paused && !video.ended) {
-            logAI("Jepret Manual dipicu. Memotong telephoto area...");
+            logAI("Jepret Manual dipicu. Mengambil Full Frame untuk diekstrak...");
             if (videoScanLoop) cancelAnimationFrame(videoScanLoop);
             executeCapture(true, null);
         }
@@ -299,86 +300,105 @@
                 hiddenCanvas.width = img.width * scale; hiddenCanvas.height = img.height * scale;
                 hiddenCanvas.getContext('2d').drawImage(img, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                 document.getElementById('loader-overlay').classList.remove('hidden');
-                // Status UPLOAD diteruskan agar memicu Multi-Pass
                 setTimeout(() => processLJKPipeline(hiddenCanvas, null, 'UPLOAD'), 100); 
             }; img.src = ev.target.result;
         }; reader.readAsDataURL(e.target.files[0]);
     });
 
     // =================================================================================
-    // THE ULTIMATE WEAPON: MODE PINTAR (TRACKER vs UPLOAD vs MANUAL)
-    // - Resolusi Konflik: Multi-Pass kini membiarkan semua metode bersaing adil.
-    // - Mode Manual dilindungi dari deteksi salah sasaran.
+    // THE ULTIMATE WEAPON: ABSOLUTE DUAL-PATH ISOLATION
+    // Algoritma dipecah menjadi dua fungsi yang tidak saling mengganggu:
+    // 1. findLiveTrackerContour() -> Cepat, Anti-Bayangan, Angle Check (Untuk Kamera)
+    // 2. findUploadManualContour() -> Senjata Rahasia, Multi-Pass, Tahan Banting (Untuk Upload/Manual)
     // =================================================================================
-    
-    function getMaxCosine(pts) {
-        let maxCosine = 0;
-        for (let j = 2; j < 5; j++) {
-            let dx1 = pts[j % 4].x - pts[j - 1].x;
-            let dy1 = pts[j % 4].y - pts[j - 1].y;
-            let dx2 = pts[j - 2].x - pts[j - 1].x;
-            let dy2 = pts[j - 2].y - pts[j - 1].y;
-            let cosine = Math.abs((dx1 * dx2 + dy1 * dy2) / Math.sqrt((dx1 * dx1 + dy1 * dy1) * (dx2 * dx2 + dy2 * dy2) + 1e-10));
-            maxCosine = Math.max(maxCosine, cosine);
+
+    // Utility Global: Mengurutkan 4 titik ke format baku (TopLeft, TopRight, BottomRight, BottomLeft)
+    function orderPoints(pts) {
+        let cx = pts.reduce((sum, p) => sum + p.x, 0) / 4;
+        let cy = pts.reduce((sum, p) => sum + p.y, 0) / 4;
+        
+        // Membagi berdasarkan Y (Atas dan Bawah)
+        let top = pts.filter(p => p.y < cy).sort((a,b) => a.x - b.x);
+        let bot = pts.filter(p => p.y >= cy).sort((a,b) => a.x - b.x);
+        
+        if (top.length === 2 && bot.length === 2) {
+            return [top[0], top[1], bot[1], bot[0]];
         }
-        return maxCosine;
+        
+        // Fallback jika kertas sangat miring (menggunakan kuadran rotasi)
+        pts.sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+        let sumPts = pts.map(p => p.x + p.y);
+        let minIdx = sumPts.indexOf(Math.min(...sumPts));
+        let sorted = [];
+        for(let i=0; i<4; i++) sorted.push(pts[(minIdx + i) % 4]);
+        return sorted;
     }
 
-    // parameter 'mode' menentukan seberapa ketat syarat luas kertasnya
-    function getUltimatePaperContour(src, mode = 'UPLOAD') {
+    // JALUR 1: TRACKER KAMERA (Live)
+    function findLiveTrackerContour(src) {
         let procMat = new cv.Mat();
-        let targetWidth = mode === 'TRACKER' ? 600.0 : 1000.0; 
-        let scaleRatio = targetWidth / src.cols;
+        let scaleRatio = 600.0 / src.cols;
         cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
 
-        let gray = new cv.Mat();
+        let gray = new cv.Mat(), blur = new cv.Mat();
         cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
 
         let clahe = new cv.CLAHE(3.0, new cv.Size(8, 8));
         clahe.apply(gray, gray);
         clahe.delete();
 
-        let bestPts = null, bestScore = 0;
+        cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+
+        let bestPts = null, maxArea = 0;
         let imgArea = procMat.cols * procMat.rows;
-        let cxCenter = procMat.cols / 2, cyCenter = procMat.rows / 2;
-        
-        // Logika syarat rasio luas minimum:
-        // Tracker butuh lincah (1.5%), Upload untuk foto meja (5%), Manual karena dizoom maka kertas harus dominan (30%)
-        let minAreaRatio = 0.05;
-        if (mode === 'TRACKER') minAreaRatio = 0.015;
-        if (mode === 'MANUAL') minAreaRatio = 0.30; 
 
         function evaluateAndSaveQuad(pts) {
-            let maxCosine = getMaxCosine(pts);
-            if (maxCosine >= 0.65) return; 
+            let maxCosine = 0;
+            for (let j = 2; j < 5; j++) {
+                let dx1 = pts[j % 4].x - pts[j - 1].x;
+                let dy1 = pts[j % 4].y - pts[j - 1].y;
+                let dx2 = pts[j - 2].x - pts[j - 1].x;
+                let dy2 = pts[j - 2].y - pts[j - 1].y;
+                let cosine = Math.abs((dx1 * dx2 + dy1 * dy2) / Math.sqrt((dx1 * dx1 + dy1 * dy1) * (dx2 * dx2 + dy2 * dy2) + 1e-10));
+                maxCosine = Math.max(maxCosine, cosine);
+            }
+            if (maxCosine >= 0.65) return; // Tolak garis bayangan aneh
 
-            let d1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-            let d2 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
-            let d3 = Math.hypot(pts[2].x - pts[3].x, pts[2].y - pts[3].y);
-            let d4 = Math.hypot(pts[3].x - pts[0].x, pts[3].y - pts[0].y);
-            let w = (d1 + d3) / 2.0, h = (d2 + d4) / 2.0;
-            let area = w * h;
-
-            if (area > (imgArea * minAreaRatio) && area < (imgArea * 0.98)) {
-                let score = area;
-                if (mode !== 'TRACKER') {
-                    // Center-weighted: lebih memprioritaskan kertas yang berada di tengah layar
-                    let polyCenter = { x: (pts[0].x + pts[2].x)/2, y: (pts[0].y + pts[2].y)/2 };
-                    let distToCenter = Math.hypot(polyCenter.x - cxCenter, polyCenter.y - cyCenter);
-                    score = area - (distToCenter * 2); 
-                }
-                
-                // BEBAS BENTROK: Kotak dengan skor tertinggi akan SELALU menang dan menimpa yang lain.
-                if (score > bestScore) {
-                    bestScore = score;
+            let area = cv.contourArea(cv.matFromArray(4, 1, cv.CV_32SC2, [pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y, pts[3].x, pts[3].y]));
+            
+            if (area > (imgArea * 0.015) && area < (imgArea * 0.98)) {
+                if (area > maxArea) {
+                    maxArea = area;
                     bestPts = pts.map(p => ({ x: p.x / scaleRatio, y: p.y / scaleRatio }));
                 }
             }
         }
 
-        function extractQuads(threshMat) {
-            let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
-            cv.findContours(threshMat, cnts, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        let thresh = new cv.Mat();
+        cv.adaptiveThreshold(blur, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 10);
+        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+        cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel);
+
+        let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
+        cv.findContours(thresh, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+        for(let i = 0; i < cnts.size(); i++) {
+            let c = cnts.get(i);
+            let approx = new cv.Mat();
+            cv.approxPolyDP(c, approx, 0.04 * cv.arcLength(c, true), true);
+            if (approx.rows === 4 && cv.isContourConvex(approx)) {
+                let pts = [];
+                for(let j = 0; j < 4; j++) pts.push({ x: approx.data32S[j*2], y: approx.data32S[j*2+1] });
+                evaluateAndSaveQuad(pts);
+            }
+            approx.delete();
+        }
+        
+        // Tracking fallback to Gradient (untuk ketajaman)
+        if (!bestPts) {
+            let grad = new cv.Mat();
+            cv.morphologyEx(gray, grad, cv.MORPH_GRADIENT, kernel);
+            cv.threshold(grad, grad, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+            cv.findContours(grad, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
             for(let i = 0; i < cnts.size(); i++) {
                 let c = cnts.get(i);
                 let approx = new cv.Mat();
@@ -390,55 +410,98 @@
                 }
                 approx.delete();
             }
+            grad.delete();
+        }
+
+        procMat.delete(); gray.delete(); blur.delete(); thresh.delete(); kernel.delete(); cnts.delete(); hierarchy.delete();
+        
+        if (!bestPts) return null;
+        return orderPoints(bestPts);
+    }
+
+    // JALUR 2: SENJATA RAHASIA UPLOAD/MANUAL (Multi-Pass Canny murni seperti v48.4/48.7)
+    function findUploadManualContour(src) {
+        let procMat = new cv.Mat();
+        let scaleRatio = 1000.0 / src.cols;
+        cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
+
+        let gray = new cv.Mat();
+        cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
+        
+        let bestPts = null, bestScore = 0;
+        let imgArea = procMat.cols * procMat.rows;
+        let cxCenter = procMat.cols / 2, cyCenter = procMat.rows / 2;
+
+        function evaluateAndSaveQuad(pts) {
+            // TIDAK ADA ANGLE CHECK DI SINI! (Agar toleran terhadap foto upload yang sedikit melengkung)
+            let d1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+            let d2 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
+            let d3 = Math.hypot(pts[2].x - pts[3].x, pts[2].y - pts[3].y);
+            let d4 = Math.hypot(pts[3].x - pts[0].x, pts[3].y - pts[0].y);
+            let w = (d1 + d3) / 2.0, h = (d2 + d4) / 2.0;
+            let area = w * h;
+
+            if (area > (imgArea * 0.05) && area <= (imgArea * 0.98)) {
+                // Center-Weighted: Mengutamakan kertas yang difokuskan di tengah foto
+                let polyCenter = { x: (pts[0].x + pts[2].x)/2, y: (pts[0].y + pts[2].y)/2 };
+                let distToCenter = Math.hypot(polyCenter.x - cxCenter, polyCenter.y - cyCenter);
+                let score = area - (distToCenter * 5); 
+                
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestPts = pts.map(p => ({ x: p.x / scaleRatio, y: p.y / scaleRatio }));
+                }
+            }
+        }
+
+        function extractQuads(threshMat) {
+            let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
+            cv.findContours(threshMat, cnts, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+            for (let i = 0; i < cnts.size(); ++i) {
+                let c = cnts.get(i);
+                let approx = new cv.Mat();
+                cv.approxPolyDP(c, approx, 0.025 * cv.arcLength(c, true), true); 
+                if (approx.rows === 4 && cv.isContourConvex(approx)) {
+                    let pts = [];
+                    for(let j=0; j<4; j++) pts.push({ x: approx.data32S[j*2], y: approx.data32S[j*2+1] });
+                    evaluateAndSaveQuad(pts);
+                }
+                approx.delete();
+            }
             cnts.delete(); hierarchy.delete();
         }
 
-        let blur = new cv.Mat();
+        let blur = new cv.Mat(), edges = new cv.Mat(), dilated = new cv.Mat();
         cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+        
+        // Multi-Pass 1: Canny (Prioritas Pertama)
+        cv.Canny(blur, edges, 30, 100);
+        let kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+        cv.dilate(edges, dilated, kernel1);
+        extractQuads(dilated);
 
-        if (mode === 'TRACKER') {
-            let thresh = new cv.Mat();
-            cv.adaptiveThreshold(blur, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 10);
-            let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-            cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel);
-            extractQuads(thresh);
-            thresh.delete(); kernel.delete();
-        } else {
-            // PERBAIKAN BENTROK: Semua pass diizinkan bersaing untuk mendapat bestScore terbesar!
-            let edges = new cv.Mat(), dilated = new cv.Mat();
-            cv.Canny(blur, edges, 30, 100);
-            let kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-            cv.dilate(edges, dilated, kernel1);
-            extractQuads(dilated);
-
+        // Multi-Pass 2: Morph Gradient (Jika kontras rendah)
+        if (!bestPts) { 
             let grad = new cv.Mat(), gradThresh = new cv.Mat();
             let kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
             cv.morphologyEx(gray, grad, cv.MORPH_GRADIENT, kernel2);
             cv.threshold(grad, gradThresh, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
             extractQuads(gradThresh);
-            
+            grad.delete(); gradThresh.delete(); kernel2.delete();
+        }
+
+        // Multi-Pass 3: Adaptive Threshold (Terakhir)
+        if (!bestPts) {
             let adThresh = new cv.Mat();
             cv.adaptiveThreshold(blur, adThresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 61, 15);
             extractQuads(adThresh);
-            
-            edges.delete(); dilated.delete(); kernel1.delete();
-            grad.delete(); gradThresh.delete(); kernel2.delete(); adThresh.delete();
+            adThresh.delete();
         }
 
-        procMat.delete(); gray.delete(); blur.delete();
+        procMat.delete(); gray.delete(); blur.delete(); edges.delete(); dilated.delete(); kernel1.delete();
         
-        if (!bestPts) return null;
-
-        // Sortir titik-titik (TL, TR, BR, BL)
-        let cx = bestPts.reduce((sum, p) => sum + p.x, 0) / 4;
-        let cy = bestPts.reduce((sum, p) => sum + p.y, 0) / 4;
-        bestPts.sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
-        let sumPts = bestPts.map(p => p.x + p.y);
-        let minIdx = sumPts.indexOf(Math.min(...sumPts));
-        let sortedPts = [];
-        for(let i=0; i<4; i++) sortedPts.push(bestPts[(minIdx + i) % 4]);
-
-        return sortedPts;
+        if(!bestPts) return null;
+        return orderPoints(bestPts);
     }
 
     function startStreamLoop() {
@@ -456,7 +519,8 @@
                     hiddenCanvas.getContext('2d').drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                     let mat = cv.imread(hiddenCanvas);
                     
-                    let paperPts = getUltimatePaperContour(mat, 'TRACKER'); 
+                    // Gunakan Jalur 1 (Tracker Khusus Kamera)
+                    let paperPts = findLiveTrackerContour(mat); 
                     
                     let ctx = overlayCanvas.getContext('2d');
                     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
@@ -484,7 +548,7 @@
                         
                         scanStatus.innerHTML = `<span class='text-emerald-500 font-bold'>MENGUNCI... (${Math.min(100, Math.round((autoCaptureLockCount/AUTO_CAPTURE_THRESHOLD)*100))}%)</span>`;
                         if (autoCaptureLockCount >= AUTO_CAPTURE_THRESHOLD) { 
-                            // SINKRONISASI BENTROK KAMERA: Titik kamera yang telah mulus dioper langsung ke fungsi pemotong!
+                            // SINKRONISASI BENTROK KAMERA: Titik dioper langsung! Kamera = 100% Pemotong yang sama!
                             let lockedMarkers = { ...smoothedMarkers };
                             cancelAnimationFrame(videoScanLoop); mat.delete(); executeCapture(false, lockedMarkers); return; 
                         }
@@ -500,39 +564,27 @@
     // --- CROP SINKRONISASI MATEMATIKA ---
     function executeCapture(isManual = false, trackedPts = null) {
         let captureCanvas = document.createElement('canvas');
-        let finalCanvas = captureCanvas; 
-        let exactPtsOriginal = null;
         
-        if (isManual) {
-            let container = document.getElementById('video-container');
-            let scaleCover = Math.max(container.clientWidth / video.videoWidth, container.clientHeight / video.videoHeight);
-            let zoom = 2.0;
-            let cropW = container.clientWidth / (zoom * scaleCover);
-            let cropH = container.clientHeight / (zoom * scaleCover);
-            let cropX = (video.videoWidth - cropW) / 2;
-            let cropY = (video.videoHeight - cropH) / 2;
-
-            captureCanvas.width = cropW; captureCanvas.height = cropH;
-            captureCanvas.getContext('2d').drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
-        } else {
-            captureCanvas.width = video.videoWidth; captureCanvas.height = video.videoHeight;
-            captureCanvas.getContext('2d').drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
-            
-            // Konversi kembali dari ukuran hiddenCanvas (kecil) ke ukuran asli kamera penuh
-            if (trackedPts) {
-                let scale = hiddenCanvas.width / video.videoWidth;
-                exactPtsOriginal = [
-                    {x: trackedPts.tl.x / scale, y: trackedPts.tl.y / scale},
-                    {x: trackedPts.tr.x / scale, y: trackedPts.tr.y / scale},
-                    {x: trackedPts.br.x / scale, y: trackedPts.br.y / scale},
-                    {x: trackedPts.bl.x / scale, y: trackedPts.bl.y / scale}
-                ];
-            }
+        // PENTING: Untuk menghindari bug cropping, kita selalu menggunakan Full Video Canvas.
+        captureCanvas.width = video.videoWidth; 
+        captureCanvas.height = video.videoHeight;
+        captureCanvas.getContext('2d').drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+        
+        let exactPtsOriginal = null;
+        if (!isManual && trackedPts) {
+            // Konversi koordinat dari hiddenCanvas kecil ke captureCanvas (asli video resolusi tinggi)
+            let scale = hiddenCanvas.width / video.videoWidth;
+            exactPtsOriginal = [
+                {x: trackedPts.tl.x / scale, y: trackedPts.tl.y / scale},
+                {x: trackedPts.tr.x / scale, y: trackedPts.tr.y / scale},
+                {x: trackedPts.br.x / scale, y: trackedPts.br.y / scale},
+                {x: trackedPts.bl.x / scale, y: trackedPts.bl.y / scale}
+            ];
         }
         
         resetUI(); document.getElementById('loader-overlay').classList.remove('hidden');
         
-        setTimeout(() => processLJKPipeline(finalCanvas, exactPtsOriginal, isManual ? 'MANUAL' : 'AUTO'), 200);
+        setTimeout(() => processLJKPipeline(captureCanvas, exactPtsOriginal, isManual ? 'MANUAL' : 'AUTO'), 200);
     }
 
     // =================================================================================
@@ -542,12 +594,20 @@
         let src = null, roughWarped = null, strictWarpedMat = null, debugMat = null; 
         try {
             src = cv.imread(canvas);
+            let paperPts = null;
             
-            // Jika exactPts ada (dari kamera Auto-Capture), kita tidak perlu mencari lagi. Kecepatan 100%!
-            let paperPts = exactPts || getUltimatePaperContour(src, scanMode); 
+            // JALUR BERCABANG:
+            if (scanMode === 'AUTO' && exactPts) {
+                paperPts = exactPts; 
+                logAI("Menggunakan koordinat sinkron dari Kamera Tracker (Terkunci Cepat).");
+            } else {
+                paperPts = findUploadManualContour(src); // Menggunakan Senjata Rahasia
+                if(scanMode === 'MANUAL') logAI("Mengeksekusi Metode Pamungkas (Foto Manual Multi-Pass).");
+                if(scanMode === 'UPLOAD') logAI("Mengeksekusi Metode Pamungkas (Upload Multi-Pass).");
+            }
             
             if (!paperPts) {
-                logAI("Batas tak terlihat. Asumsi gambar adalah Full Frame.");
+                logAI("Batas tak terlihat. Memaksa mode Full Frame LJK.");
                 paperPts = [ {x: 0, y: 0}, {x: src.cols, y: 0}, {x: src.cols, y: src.rows}, {x: 0, y: src.rows} ];
             }
 
@@ -557,11 +617,14 @@
             let d4 = Math.hypot(paperPts[3].x - paperPts[0].x, paperPts[3].y - paperPts[0].y);
             
             let pW = (d1 + d3) / 2.0, pH = (d2 + d4) / 2.0;
-            let isLandscape = pW > pH;
+            let ROUGH_W = 1200, ROUGH_H = 1700; // Selalu paksakan Rasio Portrait Baku agar tidak gepeng
             
-            let ROUGH_W = 1200, ROUGH_H = Math.round(ROUGH_W * (isLandscape ? (pW/pH) : (pH/pW))); 
+            // Jika LJK difoto miring/horizontal oleh user, kita putar paksa ke Portrait 
+            let dstArray = (pW > pH) 
+                ? [ ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H, 0, 0 ] 
+                : [ 0, 0, ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H ];
+
             let srcPtsMat = cv.matFromArray(4, 1, cv.CV_32FC2, [paperPts[0].x, paperPts[0].y, paperPts[1].x, paperPts[1].y, paperPts[2].x, paperPts[2].y, paperPts[3].x, paperPts[3].y]);
-            let dstArray = isLandscape ? [ ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H, 0, 0 ] : [ 0, 0, ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H ];
             let dstPtsMat = cv.matFromArray(4, 1, cv.CV_32FC2, dstArray);
 
             roughWarped = new cv.Mat();
@@ -569,7 +632,7 @@
             cv.warpPerspective(src, roughWarped, M, new cv.Size(ROUGH_W, ROUGH_H));
             srcPtsMat.delete(); dstPtsMat.delete(); M.delete();
 
-            logAI("Melacak 6 Fiducial Sinkronisasi...");
+            logAI("Melacak 6 Fiducial Sinkronisasi Akhir...");
             let gray = new cv.Mat(), thresh = new cv.Mat();
             cv.cvtColor(roughWarped, gray, cv.COLOR_RGBA2GRAY, 0);
             
