@@ -27,7 +27,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v48.7 (Hybrid Morphological-Adaptive Tracker & Fiducial 12%)</p>
+            <p class="text-sm text-slate-300 mt-1">v49.0 (Ultimate CLAHE OMR Engine & Angle Check)</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -38,13 +38,14 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v48.7 HYBRID</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v49.0 CLAHE</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai.<br>
                 > Radius Fiducial Warped 12%... Presisi.<br>
-                > Dual-Engine Tracker (Morphological + Adaptive)... Aktif.<br>
-                > Kekebalan Bayangan... Maksimal.<br>
+                > CLAHE Illumination Normalization... Aktif.<br>
+                > Quad Angle Validation (Trigonometry)... Aktif.<br>
+                > Kekebalan Bayangan Tingkat Profesional... Siap.<br>
                 > Menunggu aksi pengguna...<br>
             </div>
             <div>
@@ -62,7 +63,7 @@
                 <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
                     <svg class="w-16 h-16 mx-auto mb-3 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
                     Arahkan kamera ke LJK atau Upload Scan.<br>
-                    <span class="text-xs text-emerald-400">Tracker Hybrid Anti-Bayangan. Kelas Standar Aplikasi OMR.</span>
+                    <span class="text-xs text-emerald-400">Mesin CLAHE Aktif. Silakan tes dengan bayangan tangan.</span>
                 </div>
                 <video id="video" playsinline autoplay muted class="hidden telephoto-zoom"></video>
                 <canvas id="overlay-canvas" class="hidden pointer-events-none telephoto-zoom"></canvas>
@@ -305,179 +306,92 @@
     });
 
     // =================================================================================
-    // THE ULTIMATE WEAPON (Upload & Manual)
+    // THE ULTIMATE WEAPON (CLAHE + ANGLE CHECK LOGIC UNTUK TRACKER & UPLOAD)
+    // Fitur ini setara dengan algoritma OMR Berbayar (Test Plus, ZipGrade)
     // =================================================================================
-    function getUltimatePaperContour(src) {
-        let procMat = new cv.Mat();
-        let targetWidth = 1000.0; // Resolusi Tinggi untuk keakuratan
-        let scaleRatio = targetWidth / src.cols;
-        cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
-
-        let gray = new cv.Mat();
-        cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
-        
-        let bestPts = null, bestScore = 0;
-        let imgArea = procMat.cols * procMat.rows;
-        let cx = procMat.cols / 2, cy = procMat.rows / 2;
-
-        function evaluateAndSaveQuad(pts) {
-            let d1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-            let d2 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
-            let d3 = Math.hypot(pts[2].x - pts[3].x, pts[2].y - pts[3].y);
-            let d4 = Math.hypot(pts[3].x - pts[0].x, pts[3].y - pts[0].y);
-            
-            let w = (d1 + d3) / 2.0, h = (d2 + d4) / 2.0;
-            let aspect = Math.max(w, h) / (Math.min(w, h) || 1);
-            let area = w * h;
-
-            if (area > (imgArea * 0.05) && area <= (imgArea * 1.0) && aspect >= 1.0 && aspect <= 2.2) {
-                let polyCenter = { x: (pts[0].x + pts[2].x)/2, y: (pts[0].y + pts[2].y)/2 };
-                let distToCenter = Math.hypot(polyCenter.x - cx, polyCenter.y - cy);
-                let score = area - (distToCenter * 10); 
-                
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestPts = pts.map(p => ({ x: Math.round(p.x / scaleRatio), y: Math.round(p.y / scaleRatio) }));
-                }
-            }
+    
+    // Fungsi bantuan matematika: Mengecek Cosinus sudut (kemiringan sudut segi empat)
+    // Jika hasilnya mendekati 0, berarti sudutnya siku-siku (90 derajat).
+    function getMaxCosine(pts) {
+        let maxCosine = 0;
+        for (let j = 2; j < 5; j++) {
+            let dx1 = pts[j % 4].x - pts[j - 1].x;
+            let dy1 = pts[j % 4].y - pts[j - 1].y;
+            let dx2 = pts[j - 2].x - pts[j - 1].x;
+            let dy2 = pts[j - 2].y - pts[j - 1].y;
+            // Rumus Trigonometri Vektor Jarak
+            let cosine = Math.abs((dx1 * dx2 + dy1 * dy2) / Math.sqrt((dx1 * dx1 + dy1 * dy1) * (dx2 * dx2 + dy2 * dy2) + 1e-10));
+            maxCosine = Math.max(maxCosine, cosine);
         }
-
-        function extractQuads(threshMat) {
-            let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
-            cv.findContours(threshMat, cnts, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-            for (let i = 0; i < cnts.size(); ++i) {
-                let c = cnts.get(i);
-                let approx = new cv.Mat();
-                cv.approxPolyDP(c, approx, 0.025 * cv.arcLength(c, true), true); 
-                if (approx.rows === 4 && cv.isContourConvex(approx)) {
-                    let pts = [];
-                    for(let j=0; j<4; j++) pts.push({ x: approx.data32S[j*2], y: approx.data32S[j*2+1] });
-                    evaluateAndSaveQuad(pts);
-                }
-                approx.delete();
-            }
-            cnts.delete(); hierarchy.delete();
-        }
-
-        let blur = new cv.Mat(), edges = new cv.Mat(), dilated = new cv.Mat();
-        cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-        
-        cv.Canny(blur, edges, 30, 100);
-        let kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-        cv.dilate(edges, dilated, kernel1);
-        extractQuads(dilated);
-
-        if (!bestPts) {
-            let grad = new cv.Mat(), gradThresh = new cv.Mat();
-            let kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-            cv.morphologyEx(gray, grad, cv.MORPH_GRADIENT, kernel2);
-            cv.threshold(grad, gradThresh, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
-            extractQuads(gradThresh);
-            grad.delete(); gradThresh.delete(); kernel2.delete();
-        }
-
-        if (!bestPts) {
-            let adThresh = new cv.Mat();
-            cv.adaptiveThreshold(blur, adThresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 61, 15);
-            extractQuads(adThresh);
-            adThresh.delete();
-        }
-
-        procMat.delete(); gray.delete(); blur.delete(); edges.delete(); dilated.delete(); kernel1.delete();
-        
-        if(!bestPts) return null;
-
-        let centroidX = bestPts.reduce((sum, p) => sum + p.x, 0) / 4;
-        let centroidY = bestPts.reduce((sum, p) => sum + p.y, 0) / 4;
-        bestPts.sort((a, b) => Math.atan2(a.y - centroidY, a.x - centroidX) - Math.atan2(b.y - centroidY, b.x - centroidX));
-        
-        let sumXY = bestPts.map(p => p.x + p.y);
-        let minIdx = sumXY.indexOf(Math.min(...sumXY));
-        
-        let sortedPts = [];
-        for(let i=0; i<4; i++) sortedPts.push(bestPts[(minIdx + i) % 4]);
-        
-        return sortedPts;
+        return maxCosine;
     }
 
-    // =================================================================================
-    // NEW: HYBRID DUAL-ENGINE TRACKER (Seperti Aplikasi Profesional Scanner OMR)
-    // Mesin 1: Morphological Gradient (Tahan Bayangan, Mengincar Tepi Kertas)
-    // Mesin 2: Adaptive Threshold (Fallback jika kontras sangat rendah)
-    // =================================================================================
-    function getFastTrackingContour(src) {
+    function getUltimatePaperContour(src, isFastTracker = false) {
         let procMat = new cv.Mat();
-        let targetWidth = 600.0; // Resolusi stabil untuk mengeksekusi dua algoritma dalam <30ms
+        let targetWidth = isFastTracker ? 600.0 : 1000.0; // Fast vs Res Tinggi
         let scaleRatio = targetWidth / src.cols;
         cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
-        
-        let gray = new cv.Mat(), blur = new cv.Mat();
+
+        let gray = new cv.Mat(), blur = new cv.Mat(), thresh = new cv.Mat();
         cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
+
+        // 1. RAHASIA OMR PROFESIONAL: CLAHE (Contrast Limited Adaptive Histogram Equalization)
+        // Ini akan menghilangkan bayangan paling gelap sekalipun dan menormalkan cahaya secara lokal
+        let clahe = new cv.CLAHE(3.0, new cv.Size(8, 8));
+        clahe.apply(gray, gray);
+        clahe.delete();
+
+        // 2. Penghalusan Noise
         cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+
+        // 3. Adaptive Thresholding pada gambar yang sudah dinormalkan pencahayaannya (Kebal Bayangan)
+        cv.adaptiveThreshold(blur, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 10);
         
+        // 4. Menyambung garis tepi putus
+        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+        cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel);
+
+        let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
+        cv.findContours(thresh, cnts, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
         let bestPts = null, maxArea = 0;
         let imgArea = procMat.cols * procMat.rows;
         
-        // --- MESIN 1: MORPHOLOGICAL GRADIENT (Ultimate Anti-Shadow Edge Detector) ---
-        // Metode ini akan menemukan garis batas meja dan LJK secara ekstrem tajam, tapi mengabaikan gradasi bayangan
-        let grad = new cv.Mat(), thresh1 = new cv.Mat();
-        let kernel3 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-        cv.morphologyEx(blur, grad, cv.MORPH_GRADIENT, kernel3);
-        
-        // Otsu Binarization akan menentukan titik gelap terang secara otomatis tanpa butuh parameter manual
-        cv.threshold(grad, thresh1, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
-        
-        let kernel5 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-        cv.morphologyEx(thresh1, thresh1, cv.MORPH_CLOSE, kernel5);
-        
-        let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
-        cv.findContours(thresh1, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE); 
-        
-        for(let i=0; i<cnts.size(); i++) {
+        // Ambang batas area minimum untuk pelacakan. Di Fast Tracker bisa sangat jauh (1.5%)
+        let minAreaRatio = isFastTracker ? 0.015 : 0.05;
+
+        for(let i = 0; i < cnts.size(); i++) {
             let c = cnts.get(i);
             let area = cv.contourArea(c);
-            // Syarat sangat longgar, 1% area layar (bisa jarak jauh)
-            if (area > imgArea * 0.01 && area < imgArea * 0.98) {
+
+            if (area > (imgArea * minAreaRatio) && area < (imgArea * 0.98)) {
                 let approx = new cv.Mat();
-                cv.approxPolyDP(c, approx, 0.04 * cv.arcLength(c, true), true); 
-                if (approx.rows === 4 && cv.isContourConvex(approx) && area > maxArea) {
-                    maxArea = area;
-                    bestPts = [];
-                    for(let j=0; j<4; j++) bestPts.push({ x: approx.data32S[j*2] / scaleRatio, y: approx.data32S[j*2+1] / scaleRatio });
+                cv.approxPolyDP(c, approx, 0.04 * cv.arcLength(c, true), true);
+
+                // CEK MUTLAK: Harus 4 Titik & Cembung (Convex)
+                if (approx.rows === 4 && cv.isContourConvex(approx)) {
+                    let pts = [];
+                    for(let j = 0; j < 4; j++) pts.push({ x: approx.data32S[j*2], y: approx.data32S[j*2+1] });
+
+                    // 5. VALIDASI KOSINUS SUDUT (Hanya Kertas Persegi Panjang yang Diakui)
+                    // Cosine 0.65 setara dengan toleransi sudut antara ~50° hingga ~130°. 
+                    // Garis bayangan yang membentuk poligon sembarangan akan tertolak di sini!
+                    let maxCosine = getMaxCosine(pts);
+
+                    if (maxCosine < 0.65 && area > maxArea) {
+                        maxArea = area;
+                        bestPts = pts.map(p => ({ x: p.x / scaleRatio, y: p.y / scaleRatio }));
+                    }
                 }
                 approx.delete();
             }
         }
-        
-        // --- MESIN 2: ADAPTIVE FALLBACK (Berjalan dalam milidetik yang sama jika Mesin 1 gagal) ---
-        if (!bestPts) {
-            let thresh2 = new cv.Mat();
-            cv.adaptiveThreshold(blur, thresh2, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 10);
-            cv.morphologyEx(thresh2, thresh2, cv.MORPH_CLOSE, kernel5);
-            
-            cv.findContours(thresh2, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE); 
-            for(let i=0; i<cnts.size(); i++) {
-                let c = cnts.get(i);
-                let area = cv.contourArea(c);
-                if (area > imgArea * 0.01 && area < imgArea * 0.98) {
-                    let approx = new cv.Mat();
-                    cv.approxPolyDP(c, approx, 0.04 * cv.arcLength(c, true), true); 
-                    if (approx.rows === 4 && cv.isContourConvex(approx) && area > maxArea) {
-                        maxArea = area;
-                        bestPts = [];
-                        for(let j=0; j<4; j++) bestPts.push({ x: approx.data32S[j*2] / scaleRatio, y: approx.data32S[j*2+1] / scaleRatio });
-                    }
-                    approx.delete();
-                }
-            }
-            thresh2.delete();
-        }
-        
-        procMat.delete(); gray.delete(); blur.delete(); grad.delete(); thresh1.delete(); 
-        kernel3.delete(); kernel5.delete(); cnts.delete(); hierarchy.delete();
+
+        procMat.delete(); gray.delete(); blur.delete(); thresh.delete(); kernel.delete(); cnts.delete(); hierarchy.delete();
         
         if (!bestPts) return null;
-        
+
+        // Mengurutkan titik (TL, TR, BR, BL) berdasarkan kuadran
         let cx = bestPts.reduce((sum, p) => sum + p.x, 0) / 4;
         let cy = bestPts.reduce((sum, p) => sum + p.y, 0) / 4;
         bestPts.sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
@@ -485,8 +399,13 @@
         let minIdx = sum.indexOf(Math.min(...sum));
         let sortedPts = [];
         for(let i=0; i<4; i++) sortedPts.push(bestPts[(minIdx + i) % 4]);
-        
+
         return sortedPts;
+    }
+
+    // Tracker Kamera sekarang menggunakan fungsi Ultimate yang sama persis (mode FastTracker = true)
+    function getFastTrackingContour(src) {
+        return getUltimatePaperContour(src, true);
     }
 
     function startStreamLoop() {
@@ -577,8 +496,8 @@
         try {
             src = cv.imread(canvas);
             
-            // 1. PALING PERTAMA: MESIN MENCARI GARIS PEMBATAS KERTAS (Tilted, Horizontal, Vertikal, dll)
-            let paperPts = exactPts || getUltimatePaperContour(src); 
+            // Menggunakan fungsi gabungan yang sama
+            let paperPts = exactPts || getUltimatePaperContour(src, false); 
             
             if (!paperPts) {
                 logAI("Batas tak terlihat. Asumsi gambar adalah Full Frame.");
@@ -607,6 +526,12 @@
             logAI("Melacak 6 Fiducial Sinkronisasi...");
             let gray = new cv.Mat(), thresh = new cv.Mat();
             cv.cvtColor(roughWarped, gray, cv.COLOR_RGBA2GRAY, 0);
+            
+            // Juga aplikasikan CLAHE ke gambar yang sudah disetrika untuk Fiducial extraction
+            let clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
+            clahe.apply(gray, gray);
+            clahe.delete();
+
             cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
             
             // 3. KETIGA: MENCARI FIDUCIAL
