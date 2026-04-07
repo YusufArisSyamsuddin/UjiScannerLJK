@@ -14,7 +14,7 @@
         .modal { transition: opacity 0.25s ease; }
         body.modal-active { overflow: hidden; }
         #video-container { position: relative; width: 100%; height: 100%; min-height: 500px; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 0.5rem; }
-        .telephoto-zoom { transform: scale(2.0); transform-origin: center; transition: transform 0.3s ease; object-fit: cover !important; }
+        /* Telephoto zoom dihilangkan agar WYSIWYG (Apa yang dilihat = apa yang discan) */
         #video, #overlay-canvas, #result-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
         #result-canvas { z-index: 40; }
         #overlay-canvas { z-index: 30; }
@@ -27,7 +27,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v50.6 (Upload Restoration & Fiducial Alignment Plus)</p>
+            <p class="text-sm text-slate-300 mt-1">v50.7 (No-Zoom WYSIWYG & Force Snap Manual)</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -38,13 +38,12 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v50.6 FINAL</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v50.7 STABLE</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai. Menunggu Instuksi.<br>
-                > Pemisahan Jalur Canny (Tracker vs Upload) Aktif.<br>
-                > Filter Struktural X-Alignment (Tes Plus) Aktif.<br>
-                > MORPH_OPEN Anti-Noise... Berhasil di-Inject.<br>
+                > Sinkronisasi Skala Kamera 1:1 Aktif.<br>
+                > Mode "Force Snap" Manual Aktif.<br>
             </div>
             <div>
                 <label id="lbl-answer-key" class="block text-xs font-bold mb-2 text-slate-700 uppercase">Kunci Jawaban (N)</label>
@@ -61,10 +60,10 @@
                 <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
                     <svg class="w-16 h-16 mx-auto mb-3 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
                     Arahkan kamera ke LJK atau Upload Scan.<br>
-                    <span class="text-xs text-emerald-400">Algoritma Tes Plus: Ekstraksi Fiducial Lapis Ganda.</span>
+                    <span class="text-xs text-emerald-400">Mode Natural 1x: Bebas Distorsi Visual.</span>
                 </div>
-                <video id="video" playsinline autoplay muted class="hidden telephoto-zoom"></video>
-                <canvas id="overlay-canvas" class="hidden pointer-events-none telephoto-zoom"></canvas>
+                <video id="video" playsinline autoplay muted class="hidden"></video>
+                <canvas id="overlay-canvas" class="hidden pointer-events-none"></canvas>
                 <canvas id="result-canvas" class="hidden z-40 bg-white"></canvas>
                 
                 <button id="btn-manual-capture" class="hidden absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-slate-900 text-white px-8 py-4 rounded-full font-black tracking-widest shadow-[0_0_20px_rgba(16,185,129,0.4)] z-50 border-2 border-emerald-500 hover:bg-slate-800 transition-all active:scale-95 flex items-center gap-3">
@@ -330,10 +329,10 @@
     }
 
     // =================================================================================
-    // 4. PEMISAHAN LOGIKA MUTLAK (DIKEMBALIKAN KE VERSI PALING AKURAT)
+    // 4. PEMISAHAN LOGIKA MUTLAK
     // =================================================================================
 
-    // JALUR 1: TRACKER KAMERA (Mempertahankan racikan sensitivitas Bapak Canny 15, 50)
+    // JALUR 1: TRACKER KAMERA (Mempertahankan racikan sensitivitas Canny 15, 50)
     function findLiveTrackerContour(src) {
         let procMat = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat(), thresh = new cv.Mat();
         let scaleRatio = 800.0 / src.cols; 
@@ -369,7 +368,7 @@
         return bestPts ? orderPoints(bestPts) : null;
     }
 
-    // JALUR 2: SENJATA PAMUNGKAS (Upload & Manual) - Dikembalikan ke Canny(30, 100) yang tahan resolusi tinggi
+    // JALUR 2: SENJATA PAMUNGKAS (Upload & Manual)
     function findUploadManualContour(src) {
         let procMat = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat();
         let scaleRatio = 1000.0 / src.cols;
@@ -385,11 +384,17 @@
 
             let edges = new cv.Mat(), dilated = new cv.Mat();
             
-            // [FIX 50.6] Canny dikembalikan ke 30, 100 agar Upload/Manual tidak tersesat oleh teks dalam LJK
             cv.Canny(blur, edges, 30, 100);
             let kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
             cv.dilate(edges, dilated, kernel1);
             bestPts = findBestQuad(dilated, scaleRatio, false, imgArea, cxCenter, cyCenter);
+
+            // Fallback Ekstra Canny untuk Upload jika resolusi kurang tajam
+            if (!bestPts) {
+                cv.Canny(blur, edges, 15, 50);
+                cv.dilate(edges, dilated, kernel1);
+                bestPts = findBestQuad(dilated, scaleRatio, false, imgArea, cxCenter, cyCenter);
+            }
             edges.delete(); dilated.delete(); kernel1.delete();
 
             if (!bestPts) {
@@ -441,9 +446,11 @@
 
     document.getElementById('btn-manual-capture').addEventListener('click', () => {
         if (!video.paused && !video.ended) {
-            logAI("Jepret Manual dipicu. Menangkap sensor penuh (Full Frame)...");
+            logAI("Jepret Manual dipicu. Menggunakan Force Snap...");
             if (videoScanLoop) cancelAnimationFrame(videoScanLoop);
-            executeCapture(true, null); 
+            // KUNCI PERBAIKAN MANUAL: Jika tracker sudah mendeteksi, PAKAI titik tersebut! Jangan dibuang.
+            let trackedPts = smoothedMarkers ? { ...smoothedMarkers } : null;
+            executeCapture(true, trackedPts); 
         }
     });
 
@@ -523,7 +530,8 @@
         captureCanvas.getContext('2d').drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
         
         let exactPtsOriginal = null;
-        if (!isManual && trackedPts) {
+        // KUNCI PERBAIKAN: Jika ada titik koordinat tracker, hitung dan bawa ke pipeline (baik mode manual maupun auto)
+        if (trackedPts) {
             let scale = hiddenCanvas.width / video.videoWidth;
             exactPtsOriginal = [
                 {x: trackedPts.tl.x / scale, y: trackedPts.tl.y / scale},
@@ -538,7 +546,6 @@
     }
 
     // ALGORITMA TES PLUS (Structural Alignment Filter)
-    // Berfungsi mengeliminasi coretan hitam besar yang tidak segaris (tidak tegak lurus)
     function getBestAligned(boxes) {
         if (boxes.length <= 3) return boxes.slice(0, 3);
         let candidates = boxes.slice(0, 5); // Ambil 5 terbesar
@@ -550,7 +557,6 @@
                 for(let k=j+1; k<candidates.length; k++) {
                     let c = [candidates[i], candidates[j], candidates[k]];
                     let meanX = (c[0].x + c[1].x + c[2].x) / 3;
-                    // Hitung varian deviasi sumbu X (seberapa lurus ke bawah)
                     let varX = Math.pow(c[0].x-meanX,2) + Math.pow(c[1].x-meanX,2) + Math.pow(c[2].x-meanX,2);
                     if (varX < minVar) { minVar = varX; bestComb = c; }
                 }
@@ -568,11 +574,12 @@
             src = cv.imread(canvas);
             let paperPts = null;
             
-            if (scanMode === 'AUTO' && exactPts) {
-                logAI("Menggunakan koordinat sinkron dari Kamera Tracker.");
+            // KUNCI PERBAIKAN: Pokoknya kalau ada exactPts (koordinat sinkron), PASTI dipakai
+            if (exactPts) {
+                logAI("Menggunakan koordinat sinkron (Tracker Lock).");
                 paperPts = exactPts; 
             } else {
-                logAI("Mengeksekusi Metode Pamungkas (Multi-Pass).");
+                logAI("Mengeksekusi Metode Pamungkas (Multi-Pass dari Nol).");
                 paperPts = findUploadManualContour(src); 
             }
             
@@ -622,7 +629,6 @@
             let roiTop = thresh.roi(new cv.Rect(0, 0, ROUGH_W, marginH)); roiTop.setTo(new cv.Scalar(0)); roiTop.delete();
             let roiBot = thresh.roi(new cv.Rect(0, ROUGH_H - marginH, ROUGH_W, marginH)); roiBot.setTo(new cv.Scalar(0)); roiBot.delete();
 
-            // [FIX 50.6] MORPH_OPEN Dikembalikan! Ini adalah nyawa yang menghancurkan garis coretan tipis/noise.
             let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
             cv.morphologyEx(thresh, thresh, cv.MORPH_OPEN, kernel); 
             cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel); 
@@ -646,7 +652,6 @@
             }
             gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
 
-            // [FIX 50.6] Menyaring menggunakan algoritma struktural (Tes Plus)
             leftBoxes.sort((a,b) => b.area - a.area); rightBoxes.sort((a,b) => b.area - a.area);
             let leftSide = getBestAligned(leftBoxes).sort((a,b) => a.y - b.y);
             let rightSide = getBestAligned(rightBoxes).sort((a,b) => a.y - b.y);
