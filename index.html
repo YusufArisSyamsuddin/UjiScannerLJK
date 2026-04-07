@@ -27,7 +27,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v48.2 (Fiducial 10% Tightly Bound & Adaptive Distance Tracker)</p>
+            <p class="text-sm text-slate-300 mt-1">v48.3 (Warped Fiducial Mapping 15% & High-Sens Distance Tracker)</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -38,12 +38,12 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v48.2 LOGIC</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v48.3 SNIPER</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai.<br>
-                > Radius Fiducial Dikunci 10% dari Garis Pembatas... Presisi.<br>
-                > Adaptive Threshold Tracker... Aktif (Anti Jarak Jauh).<br>
+                > Radius Fiducial Warped 15%... Presisi.<br>
+                > High-Sensitivity Tracker... Aktif (Jarak Jauh).<br>
                 > Sinkronisasi Manual Capture Math... Siap.<br>
                 > Menunggu aksi pengguna...<br>
             </div>
@@ -62,7 +62,7 @@
                 <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
                     <svg class="w-16 h-16 mx-auto mb-3 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
                     Arahkan kamera ke LJK atau Upload Scan.<br>
-                    <span class="text-xs text-emerald-400">Tracker Jarak Jauh. Toleransi Miring 360°. Paskan seluruh kotak.</span>
+                    <span class="text-xs text-emerald-400">Tracker Sensor Tinggi. Melacak dari Jarak Jauh. Toleransi 360°.</span>
                 </div>
                 <video id="video" playsinline autoplay muted class="hidden telephoto-zoom"></video>
                 <canvas id="overlay-canvas" class="hidden pointer-events-none telephoto-zoom"></canvas>
@@ -76,7 +76,7 @@
                 <div id="loader-overlay" class="absolute inset-0 bg-slate-900/95 hidden flex-col justify-center items-center z-50 backdrop-blur-sm">
                     <div class="loader mb-4"></div>
                     <p id="loader-text" class="text-xs font-bold text-emerald-400 tracking-widest animate-pulse uppercase text-center leading-relaxed">
-                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Tight Margin Fiducial Aktif</span>
+                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Mapping Fiducial Aktif</span>
                     </p>
                 </div>
             </div>
@@ -401,25 +401,24 @@
     }
 
     // =================================================================================
-    // NEW: ULTRA LONG-RANGE ADAPTIVE TRACKER (Sesuai Logika Jarak Jauh)
+    // NEW: HIGH-SENSITIVITY DISTANCE TRACKER (Bisa mendeteksi dari jarak jauh)
     // =================================================================================
     function getFastTrackingContour(src) {
         let procMat = new cv.Mat();
-        let targetWidth = 400.0; // Resolusi optimal untuk tracker
+        // Resolusi dinaikkan ke 600 agar garis pensil/batas dari jarak jauh terlihat oleh robot
+        let targetWidth = 600.0; 
         let scaleRatio = targetWidth / src.cols;
         cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
         
         let gray = new cv.Mat(), blur = new cv.Mat(), thresh = new cv.Mat();
         cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
         
-        // Blur halus lalu gunakan Adaptive Threshold. 
-        // Ini jauh lebih andal memotong background dibanding Canny saat jarak jauh.
-        cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-        cv.adaptiveThreshold(blur, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
+        cv.GaussianBlur(gray, blur, new cv.Size(3, 3), 0);
+        // Canny diset SUPER SENSITIF (20, 80) agar garis samar dari jauh tetap jadi kontur
+        cv.Canny(blur, thresh, 20, 80);
         
-        // Tutup garis putus-putus
         let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-        cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel);
+        cv.dilate(thresh, thresh, kernel);
         
         let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
         cv.findContours(thresh, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE); 
@@ -431,10 +430,9 @@
             let c = cnts.get(i);
             let area = cv.contourArea(c);
             
-            // Jarak jauh = Area bisa 1.5% saja dari layar
-            if (area > imgArea * 0.015 && area < imgArea * 0.95) {
+            // Toleransi Jarak Jauh Sangat Ekstrim: Syarat luas HANYA 1% dari layar HP
+            if (area > imgArea * 0.01 && area < imgArea * 0.98) {
                 let approx = new cv.Mat();
-                // Epsilon dilonggarkan menjadi 0.04 agar garis bergerigi dari jauh tetap dianggap kotak lurus
                 cv.approxPolyDP(c, approx, 0.04 * cv.arcLength(c, true), true); 
                 if (approx.rows === 4 && cv.isContourConvex(approx)) {
                     if (area > maxArea) {
@@ -451,7 +449,6 @@
         
         if (!bestPts) return null;
         
-        // Sorting Centroid
         let cx = bestPts.reduce((sum, p) => sum + p.x, 0) / 4;
         let cy = bestPts.reduce((sum, p) => sum + p.y, 0) / 4;
         bestPts.sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
@@ -550,6 +547,8 @@
         let src = null, roughWarped = null, strictWarpedMat = null, debugMat = null; 
         try {
             src = cv.imread(canvas);
+            
+            // 1. PALING PERTAMA: MESIN MENCARI GARIS PEMBATAS KERTAS (Tilted, Horizontal, Vertikal, dll)
             let paperPts = exactPts || getUltimatePaperContour(src); 
             
             if (!paperPts) {
@@ -570,6 +569,7 @@
             let dstArray = isLandscape ? [ ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H, 0, 0 ] : [ 0, 0, ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H ];
             let dstPtsMat = cv.matFromArray(4, 1, cv.CV_32FC2, dstArray);
 
+            // 2. KEDUA: LJK YANG MIRING/TERBALIK DISETRIKA MENJADI LURUS DI SINI (roughWarped)
             roughWarped = new cv.Mat();
             let M = cv.getPerspectiveTransform(srcPtsMat, dstPtsMat);
             cv.warpPerspective(src, roughWarped, M, new cv.Size(ROUGH_W, ROUGH_H));
@@ -580,9 +580,10 @@
             cv.cvtColor(roughWarped, gray, cv.COLOR_RGBA2GRAY, 0);
             cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
             
-            // KUNCI: Margin Fiducial dikunci sangat ketat ke 10% terluar sesuai logika Bapak!
-            // Kita sudah mendeteksi batas kertas, kotak hitam fiducial pasti menempel dekat batas.
-            let maskMarginW = Math.floor(ROUGH_W * 0.10); 
+            // 3. KETIGA: MENCARI FIDUCIAL
+            // Angka 15% ini diukur DARI TEPI LJK YANG SUDAH LURUS (roughWarped), bukan dari layar kamera.
+            // Digunakan 15% agar jika potongan setrikaan meleset/melebar sedikit, kotak fiducial tidak keluar zona.
+            let maskMarginW = Math.floor(ROUGH_W * 0.15); 
             let maskMarginH = Math.floor(ROUGH_H * 0.02);
             let roiCenter = thresh.roi(new cv.Rect(maskMarginW, maskMarginH, ROUGH_W - (2 * maskMarginW), ROUGH_H - (2 * maskMarginH)));
             roiCenter.setTo(new cv.Scalar(0)); roiCenter.delete();
@@ -595,11 +596,9 @@
             let contours = new cv.MatVector(), hierarchy = new cv.Mat();
             cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-            // EDGE_MARGIN sangat kecil (1) agar fiducial yang menempel ke garis terluar tidak dibuang.
             let leftBoxes = [], rightBoxes = [], EDGE_MARGIN = 1;
             for (let i = 0; i < contours.size(); ++i) {
                 let cnt = contours.get(i), area = cv.contourArea(cnt);
-                // Ukuran ditoleransi sedikit jika kepotong (area > 30)
                 if (area > 30 && area < 10000) {
                     let rect = cv.boundingRect(cnt);
                     if (rect.x < EDGE_MARGIN || rect.y < EDGE_MARGIN || rect.x + rect.width > ROUGH_W - EDGE_MARGIN || rect.y + rect.height > ROUGH_H - EDGE_MARGIN) continue; 
