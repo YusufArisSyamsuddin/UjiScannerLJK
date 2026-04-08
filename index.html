@@ -26,7 +26,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v53.0 (Upload Logic Unification & Wide Center Masking)</p>
+            <p class="text-sm text-slate-300 mt-1">v54.0 (Direct Fiducial Tracking - Tes Plus Method)</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -37,13 +37,13 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v53.0 STABLE</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v54.0 FINAL</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai. Menunggu Instuksi.<br>
-                > Rollback ke Algoritma Upload Stabil.<br>
-                > Manual & Auto Scan menggunakan Engine Upload.<br>
-                > Center Masking diperlebar (25%) untuk Close-Up.<br>
+                > Direct Fiducial Tracker diaktifkan.<br>
+                > Deteksi Tepi Kertas diabaikan (Tes Plus Method).<br>
+                > Padding area aman fiducial di-set 10%.<br>
             </div>
             <div>
                 <label id="lbl-answer-key" class="block text-xs font-bold mb-2 text-slate-700 uppercase">Kunci Jawaban (N)</label>
@@ -60,7 +60,7 @@
                 <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
                     <svg class="w-16 h-16 mx-auto mb-3 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
                     Arahkan kamera ke LJK atau Upload Scan.<br>
-                    <span class="text-xs text-emerald-400">Pindai Manual kini seakurat Metode Upload.</span>
+                    <span class="text-xs text-emerald-400">Tracker kini melacak Fiducial langsung tanpa batas kertas.</span>
                 </div>
                 <video id="video" playsinline autoplay muted class="hidden"></video>
                 <canvas id="overlay-canvas" class="hidden pointer-events-none"></canvas>
@@ -74,7 +74,7 @@
                 <div id="loader-overlay" class="absolute inset-0 bg-slate-900/95 hidden flex-col justify-center items-center z-50 backdrop-blur-sm">
                     <div class="loader mb-4"></div>
                     <p id="loader-text" class="text-xs font-bold text-emerald-400 tracking-widest animate-pulse uppercase text-center leading-relaxed">
-                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Menerapkan Logika Upload Super Akurat...</span>
+                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Mengekstraksi Fiducial secara Langsung...</span>
                     </p>
                 </div>
             </div>
@@ -209,9 +209,7 @@
     let resultData = [], scanCounter = 1, smoothedMarkers = null, videoScanLoop = null;
     let autoCaptureLockCount = 0, trackerLostFrames = 0; 
     
-    // Tracker threshold dikembalikan ke tingkat wajar namun stabil (12 Frame)
     const AUTO_CAPTURE_THRESHOLD = 12; 
-    
     let pendingUpdateData = null, pendingUpdateIndex = -1, pendingDeleteId = null;
 
     const video = document.getElementById('video'), overlayCanvas = document.getElementById('overlay-canvas');
@@ -264,7 +262,7 @@
     const checkCV = setInterval(() => { if (typeof cv !== 'undefined' && cv.Mat) { clearInterval(checkCV); document.getElementById('cv-status').innerHTML = '<div class="w-3 h-3 rounded-full bg-emerald-500"></div> OpenCV Siap'; } }, 500);
 
     // =================================================================================
-    // 3. CORE COMPUTER VISION ALGORITHM
+    // 3. PENCARI FIDUCIAL LANGSUNG (METODE OMR TES PLUS)
     // =================================================================================
 
     function orderPoints(pts) {
@@ -278,173 +276,137 @@
         return sorted;
     }
 
-    function findBestQuad(threshMat, scaleRatio, isTrackerMode, imgArea, cxCenter, cyCenter) {
-        let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
-        let bestPts = null, bestScore = 0;
-        
-        let minAreaRatio = isTrackerMode ? 0.008 : 0.05;
-
-        try {
-            cv.findContours(threshMat, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-            for(let i = 0; i < cnts.size(); i++) {
-                let c = cnts.get(i);
-                let approx = new cv.Mat();
-                
-                cv.approxPolyDP(c, approx, 0.05 * cv.arcLength(c, true), true);
-                
-                if (approx.rows === 4 && cv.isContourConvex(approx)) {
-                    let pts = [];
-                    for(let j = 0; j < 4; j++) pts.push({ x: approx.data32S[j*2], y: approx.data32S[j*2+1] });
-                    
-                    if (isTrackerMode) {
-                        let maxCosine = 0;
-                        for (let k = 2; k < 5; k++) {
-                            let dx1 = pts[k % 4].x - pts[k - 1].x; let dy1 = pts[k % 4].y - pts[k - 1].y;
-                            let dx2 = pts[k - 2].x - pts[k - 1].x; let dy2 = pts[k - 2].y - pts[k - 1].y;
-                            let cosine = Math.abs((dx1 * dx2 + dy1 * dy2) / Math.sqrt((dx1 * dx1 + dy1 * dy1) * (dx2 * dx2 + dy2 * dy2) + 1e-10));
-                            maxCosine = Math.max(maxCosine, cosine);
-                        }
-                        if (maxCosine >= 0.65) { approx.delete(); continue; } 
-                        
-                        let rect = cv.minAreaRect(approx);
-                        let aspect = Math.max(rect.size.width, rect.size.height) / Math.min(rect.size.width, rect.size.height);
-                        if (aspect < 1.1 || aspect > 2.0) { approx.delete(); continue; }
-                    }
-
-                    let area = cv.contourArea(cv.matFromArray(4, 1, cv.CV_32SC2, [pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y, pts[3].x, pts[3].y]));
-                    
-                    if (area > (imgArea * minAreaRatio) && area < (imgArea * 0.98)) {
-                        let score = area;
-                        if (!isTrackerMode) {
-                            let polyCenter = { x: (pts[0].x + pts[2].x)/2, y: (pts[0].y + pts[2].y)/2 };
-                            let distToCenter = Math.hypot(polyCenter.x - cxCenter, polyCenter.y - cyCenter);
-                            score = area - (distToCenter * 5); 
-                        }
-                        
-                        if (score > bestScore) {
-                            bestScore = score;
-                            bestPts = pts.map(p => ({ x: p.x / scaleRatio, y: p.y / scaleRatio }));
-                        }
-                    }
-                }
-                approx.delete();
-            }
-        } finally {
-            cnts.delete(); hierarchy.delete();
-        }
-        return bestPts;
-    }
-
-    // =================================================================================
-    // 4. PEMISAHAN LOGIKA MUTLAK
-    // =================================================================================
-
-    // Tracker Hijau Kamera (Sangat Ringan, Hanya untuk Indikator Visual)
-    function findLiveTrackerContour(src) {
-        let procMat = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat(), thresh = new cv.Mat();
-        let scaleRatio = 800.0 / src.cols; 
-        let bestPts = null;
+    // FUNGSI SUPER: Melacak 4 kotak hitam secara langsung, mengabaikan warna meja/kertas.
+    function findFiducialBoundingBox(src) {
+        let gray = new cv.Mat(), thresh = new cv.Mat(), blur = new cv.Mat();
+        let scaleRatio = 800.0 / src.cols; // Skala turun agar pencarian sangat cepat
+        let procMat = new cv.Mat();
+        let resultPts = null;
 
         try {
             cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
             cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
-            
-            let clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
+
+            // Perkuat kontras blok hitam vs latar
+            let clahe = new cv.CLAHE(3.0, new cv.Size(8, 8));
             clahe.apply(gray, gray);
             clahe.delete();
 
             cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-            cv.Canny(blur, thresh, 15, 50);
-            
-            let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-            cv.dilate(thresh, thresh, kernel);
-            kernel.delete();
+            cv.adaptiveThreshold(blur, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
 
-            bestPts = findBestQuad(thresh, scaleRatio, true, procMat.cols * procMat.rows, 0, 0);
-            
-            if (!bestPts) {
-                cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 10);
-                let kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-                cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel2);
-                kernel2.delete();
-                bestPts = findBestQuad(thresh, scaleRatio, true, procMat.cols * procMat.rows, 0, 0);
+            // Morphologi untuk menyatukan titik-titik kecil dan menghapus coretan pensil
+            let kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+            cv.morphologyEx(thresh, thresh, cv.MORPH_OPEN, kernel1);
+            let kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+            cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel2);
+            kernel1.delete(); kernel2.delete();
+
+            let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
+            cv.findContours(thresh, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+            let blocks = [];
+            for (let i = 0; i < cnts.size(); ++i) {
+                let c = cnts.get(i), area = cv.contourArea(c);
+                // Area filter (1 kotak 30px di layar 800px lebarnya sekitar ~12px -> area ~144)
+                if (area > 30 && area < 8000) {
+                    let rect = cv.boundingRect(c);
+                    let aspect = rect.width / rect.height, extent = area / (rect.width * rect.height);
+                    // Harus berbentuk kotak kokoh (extent > 0.4)
+                    if (aspect >= 0.3 && aspect <= 3.0 && extent >= 0.4) {
+                        blocks.push({ 
+                            x: (rect.x + rect.width / 2) / scaleRatio, 
+                            y: (rect.y + rect.height / 2) / scaleRatio, 
+                            area: area / (scaleRatio*scaleRatio) 
+                        });
+                    }
+                }
+            }
+            cnts.delete(); hierarchy.delete();
+
+            // Jika menemukan banyak blok hitam, kita saring ukurannya yang seragam (membuang coretan besar)
+            if (blocks.length >= 4) {
+                blocks.sort((a, b) => a.area - b.area);
+                let medianArea = blocks[Math.floor(blocks.length / 2)].area;
+                let filtered = blocks.filter(b => b.area >= medianArea * 0.3 && b.area <= medianArea * 3.0);
+
+                if (filtered.length >= 4) {
+                    // Cari 4 sudut paling ekstrim (Absolute Corners)
+                    filtered.sort((a, b) => (a.x + a.y) - (b.x + b.y));
+                    let TL = filtered[0];
+                    let BR = filtered[filtered.length - 1];
+
+                    filtered.sort((a, b) => (a.x - a.y) - (b.x - b.y));
+                    let BL = filtered[0];
+                    let TR = filtered[filtered.length - 1];
+
+                    // Validasi Geometris: LJK potret (tinggi lebih panjang dari lebar)
+                    let aspect = Math.hypot(TL.x-BL.x, TL.y-BL.y) / Math.hypot(TL.x-TR.x, TL.y-TR.y);
+                    if (aspect >= 1.0 && aspect <= 2.2) {
+                        resultPts = [TL, TR, BR, BL];
+                    }
+                }
             }
         } finally {
-            procMat.delete(); gray.delete(); blur.delete(); thresh.delete();
+            gray.delete(); thresh.delete(); blur.delete(); procMat.delete();
         }
-        
-        return bestPts ? orderPoints(bestPts) : null;
+        return resultPts;
     }
 
-    // JALUR UPLOAD STABIL (DIKEMBALIKAN 100% KE VERSI MAXIMAL)
-    // Jalur ini kini dipakai oleh Upload, Pindai Manual, dan Tracker Kamera saat menjepret!
+    // Fungsi Fallback Lama (Jika kondisi super gelap / rusak)
     function findUploadManualContour(src) {
         let procMat = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat();
         let scaleRatio = 1000.0 / src.cols;
         let bestPts = null;
-
         try {
             cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
             cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
-
-            let clahe = new cv.CLAHE(3.0, new cv.Size(8, 8));
-            clahe.apply(gray, gray);
-            clahe.delete();
-            
+            let clahe = new cv.CLAHE(3.0, new cv.Size(8, 8)); clahe.apply(gray, gray); clahe.delete();
             cv.GaussianBlur(gray, blur, new cv.Size(7, 7), 0);
-            
-            let imgArea = procMat.cols * procMat.rows;
-            let cxCenter = procMat.cols / 2, cyCenter = procMat.rows / 2;
-
-            let edges = new cv.Mat(), closed = new cv.Mat();
-            let kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+            let imgArea = procMat.cols * procMat.rows, cxCenter = procMat.cols / 2, cyCenter = procMat.rows / 2;
+            let edges = new cv.Mat(), closed = new cv.Mat(), kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
             
             cv.Canny(blur, edges, 30, 100);
-            
             cv.morphologyEx(edges, closed, cv.MORPH_CLOSE, kernel1);
             bestPts = findBestQuad(closed, scaleRatio, false, imgArea, cxCenter, cyCenter);
 
             if (!bestPts) {
-                cv.Canny(blur, edges, 15, 50);
-                cv.morphologyEx(edges, closed, cv.MORPH_CLOSE, kernel1);
-                bestPts = findBestQuad(closed, scaleRatio, false, imgArea, cxCenter, cyCenter);
-            }
-            edges.delete(); closed.delete(); kernel1.delete();
-
-            if (!bestPts) {
-                let grad = new cv.Mat();
-                let kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+                let grad = new cv.Mat(), kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
                 cv.morphologyEx(gray, grad, cv.MORPH_GRADIENT, kernel2);
                 cv.threshold(grad, grad, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
                 bestPts = findBestQuad(grad, scaleRatio, false, imgArea, cxCenter, cyCenter);
                 grad.delete(); kernel2.delete();
             }
-
-            if (!bestPts) {
-                let brightMask = new cv.Mat();
-                cv.threshold(gray, brightMask, 140, 255, cv.THRESH_BINARY); 
-                let kernel3 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9, 9));
-                cv.morphologyEx(brightMask, brightMask, cv.MORPH_CLOSE, kernel3);
-                bestPts = findBestQuad(brightMask, scaleRatio, false, imgArea, cxCenter, cyCenter);
-                brightMask.delete(); kernel3.delete();
-            }
-
-            if (!bestPts) {
-                let adThresh = new cv.Mat();
-                cv.adaptiveThreshold(blur, adThresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 61, 15);
-                bestPts = findBestQuad(adThresh, scaleRatio, false, imgArea, cxCenter, cyCenter);
-                adThresh.delete();
-            }
-
-        } finally {
-            procMat.delete(); gray.delete(); blur.delete();
-        }
+            edges.delete(); closed.delete(); kernel1.delete();
+        } finally { procMat.delete(); gray.delete(); blur.delete(); }
         
         return bestPts ? orderPoints(bestPts) : null;
     }
 
+    function findBestQuad(threshMat, scaleRatio, isTrackerMode, imgArea, cxCenter, cyCenter) {
+        let cnts = new cv.MatVector(), hierarchy = new cv.Mat(), bestPts = null, bestScore = 0;
+        try {
+            cv.findContours(threshMat, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+            for(let i = 0; i < cnts.size(); i++) {
+                let c = cnts.get(i), approx = new cv.Mat();
+                cv.approxPolyDP(c, approx, 0.05 * cv.arcLength(c, true), true);
+                if (approx.rows === 4 && cv.isContourConvex(approx)) {
+                    let pts = []; for(let j = 0; j < 4; j++) pts.push({ x: approx.data32S[j*2], y: approx.data32S[j*2+1] });
+                    let area = cv.contourArea(cv.matFromArray(4, 1, cv.CV_32SC2, [pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y, pts[3].x, pts[3].y]));
+                    if (area > (imgArea * 0.05) && area < (imgArea * 0.98)) {
+                        let polyCenter = { x: (pts[0].x + pts[2].x)/2, y: (pts[0].y + pts[2].y)/2 };
+                        let distToCenter = Math.hypot(polyCenter.x - cxCenter, polyCenter.y - cyCenter);
+                        let score = area - (distToCenter * 5); 
+                        if (score > bestScore) { bestScore = score; bestPts = pts.map(p => ({ x: p.x / scaleRatio, y: p.y / scaleRatio })); }
+                    }
+                } approx.delete();
+            }
+        } finally { cnts.delete(); hierarchy.delete(); }
+        return bestPts;
+    }
+
     // =================================================================================
-    // 5. KONTROL HARDWARE & EVENT LISTENER
+    // 5. KONTROL HARDWARE & TRACKER KAMERA (SEKARANG MENGGUNAKAN OMR LANGSUNG)
     // =================================================================================
     
     document.getElementById('btn-camera').addEventListener('click', async () => {
@@ -504,11 +466,23 @@
                 try {
                     hiddenCanvas.getContext('2d').drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                     let mat = cv.imread(hiddenCanvas);
-                    
-                    let paperPts = findLiveTrackerContour(mat); 
-                    
                     let ctx = overlayCanvas.getContext('2d');
                     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+                    
+                    // LANGKAH PINTAR: Tracker langsung melacak Fiducial, BUKAN kertas!
+                    let paperPts = null;
+                    let fiducialPts = findFiducialBoundingBox(mat);
+                    
+                    if (fiducialPts) {
+                        // Agar kotak hijau tracker membungkus seluruh LJK (tidak hanya di tengah fiducial)
+                        // Kita lebarkan kotak hijaunya sejauh 10%
+                        let cx = (fiducialPts[0].x + fiducialPts[1].x + fiducialPts[2].x + fiducialPts[3].x) / 4;
+                        let cy = (fiducialPts[0].y + fiducialPts[1].y + fiducialPts[2].y + fiducialPts[3].y) / 4;
+                        paperPts = fiducialPts.map(p => ({ x: cx + (p.x - cx) * 1.10, y: cy + (p.y - cy) * 1.10 }));
+                    } else {
+                        // Fallback ke metode lama untuk deteksi tracker
+                        paperPts = findUploadManualContour(mat);
+                    }
 
                     if (paperPts) {
                         trackerLostFrames = 0; 
@@ -584,13 +558,15 @@
         setTimeout(() => processLJKPipeline(captureCanvas, exactPtsOriginal), 100);
     }
 
-    // Algoritma Seleksi Barisan Kotak (Tes Plus)
+    // =================================================================================
+    // 6. PIPELINE FINAL (HYBRID FIDUCIAL DIRECT + EXTRACTION ENGINE)
+    // =================================================================================
+
     function getBestAligned(boxes) {
         if (boxes.length <= 3) return boxes.slice(0, 3);
         let candidates = boxes.sort((a,b) => b.area - a.area).slice(0, 6); 
         let bestComb = candidates.slice(0, 3);
         let minVar = Infinity;
-        
         for(let i=0; i<candidates.length-2; i++) {
             for(let j=i+1; j<candidates.length-1; j++) {
                 for(let k=j+1; k<candidates.length; k++) {
@@ -604,32 +580,43 @@
         return bestComb.sort((a,b) => a.y - b.y);
     }
 
-    // =================================================================================
-    // 6. PIPELINE FINAL (DIKEMBALIKAN KE VERSI UPLOAD STABIL)
-    // =================================================================================
     function processLJKPipeline(canvas, exactPts = null) {
         let src = null, roughWarped = null, strictWarpedMat = null; 
         try {
             src = cv.imread(canvas);
             let paperPts = null;
             
-            // KUNCI UTAMA: Semua Mode kini wajib melewati deteksi Tepi Upload Terkuat.
-            logAI("Mencari tepi kertas (Metode Upload Pamungkas)...");
-            paperPts = findUploadManualContour(src); 
+            // -------------------------------------------------------------------------
+            // PENARGETAN BARU: Langsung cari Fiducial Hitam (Rahasia Tes Plus)
+            // -------------------------------------------------------------------------
+            logAI("Menganalisis Koordinat Fiducial Secara Langsung...");
+            let fiducialPts = findFiducialBoundingBox(src); 
             
-            // Jika metode terkuat Upload gagal di frame kamera (karena buram/terhalang)
-            if (!paperPts && exactPts) {
-                logAI("Mengekspansi margin Tracker (5%) sebagai pengaman...", true);
-                let cx = (exactPts[0].x + exactPts[1].x + exactPts[2].x + exactPts[3].x) / 4;
-                let cy = (exactPts[0].y + exactPts[1].y + exactPts[2].y + exactPts[3].y) / 4;
-                paperPts = exactPts.map(p => ({
-                    x: Math.max(0, Math.min(src.cols, cx + (p.x - cx) * 1.05)),
-                    y: Math.max(0, Math.min(src.rows, cy + (p.y - cy) * 1.05))
+            if (fiducialPts) {
+                logAI("Fiducial terkunci! Mengekspansi 10% untuk pemotongan sempurna...");
+                // Kita telah menemukan 4 sudut fiducial di dunia nyata.
+                // Sekarang kita lebarkan titik tersebut 10% agar saat dipotong, 
+                // fiducial jatuh dengan aman *di dalam* gambar, bukan tepat di tepinya.
+                let cx = (fiducialPts[0].x + fiducialPts[1].x + fiducialPts[2].x + fiducialPts[3].x) / 4;
+                let cy = (fiducialPts[0].y + fiducialPts[1].y + fiducialPts[2].y + fiducialPts[3].y) / 4;
+                paperPts = fiducialPts.map(p => ({
+                    x: Math.max(0, Math.min(src.cols, cx + (p.x - cx) * 1.10)),
+                    y: Math.max(0, Math.min(src.rows, cy + (p.y - cy) * 1.10))
                 }));
+            } else {
+                logAI("Fiducial tak terlihat di frame utama. Menggunakan Tepi Kertas...", true);
+                paperPts = findUploadManualContour(src); 
+            }
+
+            // Jika semua gagal (misal difoto SUPER dekat sampai kertas tidak terlihat),
+            // kita gunakan koordinat tracker terakhir yang hijau tadi.
+            if (!paperPts && exactPts) {
+                logAI("Fallback Tracker diaktifkan...", true);
+                paperPts = exactPts;
             }
 
             if (!paperPts) {
-                logAI("Kertas penuh di layar. Memproses Full-Frame...", true);
+                logAI("Memproses Layar Penuh (Close-Up Murni)...", true);
                 paperPts = [ {x: 0, y: 0}, {x: src.cols, y: 0}, {x: src.cols, y: src.rows}, {x: 0, y: src.rows} ];
             }
 
@@ -639,7 +626,6 @@
             let d4 = Math.hypot(paperPts[3].x - paperPts[0].x, paperPts[3].y - paperPts[0].y);
             
             let pW = (d1 + d3) / 2.0, pH = (d2 + d4) / 2.0;
-            
             let ROUGH_W = 1200; 
             let ratio = Math.max(pH, pW) / Math.min(pH, pW); 
             let calculated_H = Math.round(ROUGH_W * ratio);
@@ -649,7 +635,6 @@
             let ROUGH_H = calculated_H;
             
             let dstArray = (pW > pH) ? [ ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H, 0, 0 ] : [ 0, 0, ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H ];
-
             let srcPtsMat = cv.matFromArray(4, 1, cv.CV_32FC2, [paperPts[0].x, paperPts[0].y, paperPts[1].x, paperPts[1].y, paperPts[2].x, paperPts[2].y, paperPts[3].x, paperPts[3].y]);
             let dstPtsMat = cv.matFromArray(4, 1, cv.CV_32FC2, dstArray);
 
@@ -658,31 +643,27 @@
             cv.warpPerspective(src, roughWarped, M, new cv.Size(ROUGH_W, ROUGH_H));
             srcPtsMat.delete(); dstPtsMat.delete(); M.delete();
 
-            // PENGEMBALIAN METODE FIDUCIAL STABIL UPLOAD (Adaptive Threshold + Center Masking)
-            logAI("Melacak 6 Fiducial (Center Masking Diperlebar 25%)...");
+            // -------------------------------------------------------------------------
+            // MESIN EKSTRAKSI UTAMA YANG SUDAH AKURAT (TIDAK DIUBAH)
+            // -------------------------------------------------------------------------
+            logAI("Menyelaraskan 6 Garis Matriks...");
             let gray = new cv.Mat(), thresh = new cv.Mat();
             cv.cvtColor(roughWarped, gray, cv.COLOR_RGBA2GRAY, 0);
 
             let claheFiducial = new cv.CLAHE(2.0, new cv.Size(8, 8));
-            claheFiducial.apply(gray, gray);
-            claheFiducial.delete();
+            claheFiducial.apply(gray, gray); claheFiducial.delete();
 
             cv.GaussianBlur(gray, gray, new cv.Size(3, 3), 0); 
             cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
             
-            // KUNCI: Margin diperlebar menjadi 25% (0.25). 
-            // Ini membuat sistem sangat aman memotong dari jarak dekat tanpa menghapus kotak hitam!
             let marginW = Math.floor(ROUGH_W * 0.25); 
             let marginH = Math.floor(ROUGH_H * 0.02); 
             
-            // Tutup area tengah LJK agar tulisan siswa dan bulatan jawaban tidak dianggap fiducial
             let centerMask = thresh.roi(new cv.Rect(marginW, 0, ROUGH_W - (2 * marginW), ROUGH_H));
             centerMask.setTo(new cv.Scalar(0)); centerMask.delete();
-            
             let roiTop = thresh.roi(new cv.Rect(0, 0, ROUGH_W, marginH)); roiTop.setTo(new cv.Scalar(0)); roiTop.delete();
             let roiBot = thresh.roi(new cv.Rect(0, ROUGH_H - marginH, ROUGH_W, marginH)); roiBot.setTo(new cv.Scalar(0)); roiBot.delete();
 
-            // Morphologi standar yang terbukti sukses
             let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
             cv.morphologyEx(thresh, thresh, cv.MORPH_OPEN, kernel); 
             cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel); 
@@ -709,10 +690,10 @@
             let leftSide = getBestAligned(leftBoxes);
             let rightSide = getBestAligned(rightBoxes);
 
-            logAI(`Fiducial Terekstraksi -> Kiri: ${leftSide.length}, Kanan: ${rightSide.length}`);
+            logAI(`Fiducial Final -> Kiri: ${leftSide.length}, Kanan: ${rightSide.length}`);
 
             if (leftSide.length < 3 || rightSide.length < 3) {
-                throw new Error(`Fiducial Gagal (Kiri: ${leftSide.length}/3, Kanan: ${rightSide.length}/3). Pastikan kotak hitam tidak tertutup.`);
+                throw new Error(`Fiducial Gagal (Kiri: ${leftSide.length}/3, Kanan: ${rightSide.length}/3).`);
             }
 
             let TL, ML, BL, TR, MR, BR;
@@ -749,7 +730,7 @@
                 isSuccess = performExtraction(strictWarpedMat, true); 
                 if (!isSuccess) {
                     logAI("Gagal membaca Identitas LJK.", true);
-                    showCustomAlert("LJK gagal diproses. Pastikan nama terisi dan foto cukup terang.");
+                    showCustomAlert("LJK gagal diproses. Pastikan LJK jelas dan tidak terpotong.");
                 }
             }
 
