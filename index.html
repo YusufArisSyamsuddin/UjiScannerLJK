@@ -26,7 +26,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v54.0 (Direct Fiducial Tracking - Tes Plus Method)</p>
+            <p class="text-sm text-slate-300 mt-1">v56.0 (ROI Bullseye Extraction - Professional OMR Logic)</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -37,13 +37,13 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v54.0 FINAL</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v56.0 FINAL</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai. Menunggu Instuksi.<br>
-                > Direct Fiducial Tracker diaktifkan.<br>
-                > Deteksi Tepi Kertas diabaikan (Tes Plus Method).<br>
-                > Padding area aman fiducial di-set 10%.<br>
+                > Logika Upload distabilkan ulang.<br>
+                > Mesin ROI Bullseye 6-Fiducial diaktifkan.<br>
+                > Coretan & teks siswa tidak akan memengaruhi pemotongan.<br>
             </div>
             <div>
                 <label id="lbl-answer-key" class="block text-xs font-bold mb-2 text-slate-700 uppercase">Kunci Jawaban (N)</label>
@@ -60,7 +60,7 @@
                 <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
                     <svg class="w-16 h-16 mx-auto mb-3 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
                     Arahkan kamera ke LJK atau Upload Scan.<br>
-                    <span class="text-xs text-emerald-400">Tracker kini melacak Fiducial langsung tanpa batas kertas.</span>
+                    <span class="text-xs text-emerald-400">Tracker ROI bekerja dengan sangat cepat dan akurat.</span>
                 </div>
                 <video id="video" playsinline autoplay muted class="hidden"></video>
                 <canvas id="overlay-canvas" class="hidden pointer-events-none"></canvas>
@@ -74,7 +74,7 @@
                 <div id="loader-overlay" class="absolute inset-0 bg-slate-900/95 hidden flex-col justify-center items-center z-50 backdrop-blur-sm">
                     <div class="loader mb-4"></div>
                     <p id="loader-text" class="text-xs font-bold text-emerald-400 tracking-widest animate-pulse uppercase text-center leading-relaxed">
-                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Mengekstraksi Fiducial secara Langsung...</span>
+                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Mencari Koordinat Absolut Fiducial...</span>
                     </p>
                 </div>
             </div>
@@ -124,6 +124,7 @@
     </div>
 </div>
 
+<!-- Modals -->
 <div id="result-modal" class="modal opacity-0 pointer-events-none fixed w-full h-full top-0 left-0 flex items-center justify-center z-[100]">
     <div class="modal-overlay absolute w-full h-full bg-slate-900 opacity-75"></div>
     <div class="modal-container bg-white w-11/12 md:max-w-md mx-auto rounded-xl shadow-2xl z-50 transform scale-95 transition-transform duration-300 overflow-hidden">
@@ -191,7 +192,9 @@
     // 1. KONSTANTA & VARIABEL GLOBAL
     // =================================================================================
     const GRID_SIZE = 30;
-    const FIDUCIAL_WARP_W = 40 * GRID_SIZE, FIDUCIAL_WARP_H = 57 * GRID_SIZE;
+    // Ukuran standar internal OMR kita: LJK memiliki lebar 40 grid dan tinggi 57 grid.
+    const FIDUCIAL_WARP_W = 40 * GRID_SIZE; // 1200
+    const FIDUCIAL_WARP_H = 57 * GRID_SIZE; // 1710
     const START_X = 1 * GRID_SIZE, START_Y = 3 * GRID_SIZE;
     const GRID_COLS = 38, GRID_ROWS = 53;
 
@@ -262,9 +265,9 @@
     const checkCV = setInterval(() => { if (typeof cv !== 'undefined' && cv.Mat) { clearInterval(checkCV); document.getElementById('cv-status').innerHTML = '<div class="w-3 h-3 rounded-full bg-emerald-500"></div> OpenCV Siap'; } }, 500);
 
     // =================================================================================
-    // 3. PENCARI FIDUCIAL LANGSUNG (METODE OMR TES PLUS)
+    // 3. MESIN GEOMETRIS & DETEKSI AWAL KERTAS
     // =================================================================================
-
+    
     function orderPoints(pts) {
         let cx = pts.reduce((sum, p) => sum + p.x, 0) / 4;
         let cy = pts.reduce((sum, p) => sum + p.y, 0) / 4;
@@ -274,113 +277,6 @@
         let sorted = [];
         for(let i=0; i<4; i++) sorted.push(pts[(minIdx + i) % 4]);
         return sorted;
-    }
-
-    // FUNGSI SUPER: Melacak 4 kotak hitam secara langsung, mengabaikan warna meja/kertas.
-    function findFiducialBoundingBox(src) {
-        let gray = new cv.Mat(), thresh = new cv.Mat(), blur = new cv.Mat();
-        let scaleRatio = 800.0 / src.cols; // Skala turun agar pencarian sangat cepat
-        let procMat = new cv.Mat();
-        let resultPts = null;
-
-        try {
-            cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
-            cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
-
-            // Perkuat kontras blok hitam vs latar
-            let clahe = new cv.CLAHE(3.0, new cv.Size(8, 8));
-            clahe.apply(gray, gray);
-            clahe.delete();
-
-            cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-            cv.adaptiveThreshold(blur, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
-
-            // Morphologi untuk menyatukan titik-titik kecil dan menghapus coretan pensil
-            let kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-            cv.morphologyEx(thresh, thresh, cv.MORPH_OPEN, kernel1);
-            let kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-            cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel2);
-            kernel1.delete(); kernel2.delete();
-
-            let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
-            cv.findContours(thresh, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-            let blocks = [];
-            for (let i = 0; i < cnts.size(); ++i) {
-                let c = cnts.get(i), area = cv.contourArea(c);
-                // Area filter (1 kotak 30px di layar 800px lebarnya sekitar ~12px -> area ~144)
-                if (area > 30 && area < 8000) {
-                    let rect = cv.boundingRect(c);
-                    let aspect = rect.width / rect.height, extent = area / (rect.width * rect.height);
-                    // Harus berbentuk kotak kokoh (extent > 0.4)
-                    if (aspect >= 0.3 && aspect <= 3.0 && extent >= 0.4) {
-                        blocks.push({ 
-                            x: (rect.x + rect.width / 2) / scaleRatio, 
-                            y: (rect.y + rect.height / 2) / scaleRatio, 
-                            area: area / (scaleRatio*scaleRatio) 
-                        });
-                    }
-                }
-            }
-            cnts.delete(); hierarchy.delete();
-
-            // Jika menemukan banyak blok hitam, kita saring ukurannya yang seragam (membuang coretan besar)
-            if (blocks.length >= 4) {
-                blocks.sort((a, b) => a.area - b.area);
-                let medianArea = blocks[Math.floor(blocks.length / 2)].area;
-                let filtered = blocks.filter(b => b.area >= medianArea * 0.3 && b.area <= medianArea * 3.0);
-
-                if (filtered.length >= 4) {
-                    // Cari 4 sudut paling ekstrim (Absolute Corners)
-                    filtered.sort((a, b) => (a.x + a.y) - (b.x + b.y));
-                    let TL = filtered[0];
-                    let BR = filtered[filtered.length - 1];
-
-                    filtered.sort((a, b) => (a.x - a.y) - (b.x - b.y));
-                    let BL = filtered[0];
-                    let TR = filtered[filtered.length - 1];
-
-                    // Validasi Geometris: LJK potret (tinggi lebih panjang dari lebar)
-                    let aspect = Math.hypot(TL.x-BL.x, TL.y-BL.y) / Math.hypot(TL.x-TR.x, TL.y-TR.y);
-                    if (aspect >= 1.0 && aspect <= 2.2) {
-                        resultPts = [TL, TR, BR, BL];
-                    }
-                }
-            }
-        } finally {
-            gray.delete(); thresh.delete(); blur.delete(); procMat.delete();
-        }
-        return resultPts;
-    }
-
-    // Fungsi Fallback Lama (Jika kondisi super gelap / rusak)
-    function findUploadManualContour(src) {
-        let procMat = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat();
-        let scaleRatio = 1000.0 / src.cols;
-        let bestPts = null;
-        try {
-            cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
-            cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
-            let clahe = new cv.CLAHE(3.0, new cv.Size(8, 8)); clahe.apply(gray, gray); clahe.delete();
-            cv.GaussianBlur(gray, blur, new cv.Size(7, 7), 0);
-            let imgArea = procMat.cols * procMat.rows, cxCenter = procMat.cols / 2, cyCenter = procMat.rows / 2;
-            let edges = new cv.Mat(), closed = new cv.Mat(), kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-            
-            cv.Canny(blur, edges, 30, 100);
-            cv.morphologyEx(edges, closed, cv.MORPH_CLOSE, kernel1);
-            bestPts = findBestQuad(closed, scaleRatio, false, imgArea, cxCenter, cyCenter);
-
-            if (!bestPts) {
-                let grad = new cv.Mat(), kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-                cv.morphologyEx(gray, grad, cv.MORPH_GRADIENT, kernel2);
-                cv.threshold(grad, grad, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
-                bestPts = findBestQuad(grad, scaleRatio, false, imgArea, cxCenter, cyCenter);
-                grad.delete(); kernel2.delete();
-            }
-            edges.delete(); closed.delete(); kernel1.delete();
-        } finally { procMat.delete(); gray.delete(); blur.delete(); }
-        
-        return bestPts ? orderPoints(bestPts) : null;
     }
 
     function findBestQuad(threshMat, scaleRatio, isTrackerMode, imgArea, cxCenter, cyCenter) {
@@ -405,8 +301,88 @@
         return bestPts;
     }
 
+    // Fungsi deteksi batas kertas klasik yang sangat stabil untuk Upload (dikembalikan dari v51)
+    function findRoughPaperBoundary(src) {
+        let procMat = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat();
+        let scaleRatio = 1000.0 / src.cols;
+        let bestPts = null;
+        try {
+            cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
+            cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
+            let clahe = new cv.CLAHE(3.0, new cv.Size(8, 8)); clahe.apply(gray, gray); clahe.delete();
+            cv.GaussianBlur(gray, blur, new cv.Size(7, 7), 0);
+            let imgArea = procMat.cols * procMat.rows, cxCenter = procMat.cols / 2, cyCenter = procMat.rows / 2;
+            
+            let edges = new cv.Mat(), closed = new cv.Mat(), kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+            cv.Canny(blur, edges, 30, 100);
+            cv.morphologyEx(edges, closed, cv.MORPH_CLOSE, kernel1);
+            bestPts = findBestQuad(closed, scaleRatio, false, imgArea, cxCenter, cyCenter);
+
+            if (!bestPts) {
+                let grad = new cv.Mat(), kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+                cv.morphologyEx(gray, grad, cv.MORPH_GRADIENT, kernel2);
+                cv.threshold(grad, grad, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
+                bestPts = findBestQuad(grad, scaleRatio, false, imgArea, cxCenter, cyCenter);
+                grad.delete(); kernel2.delete();
+            }
+            edges.delete(); closed.delete(); kernel1.delete();
+        } finally { procMat.delete(); gray.delete(); blur.delete(); }
+        
+        return bestPts ? orderPoints(bestPts) : null;
+    }
+
     // =================================================================================
-    // 5. KONTROL HARDWARE & TRACKER KAMERA (SEKARANG MENGGUNAKAN OMR LANGSUNG)
+    // 4. METODE PROFESIONAL: ROI BULLSEYE FIDUCIAL SCANNER
+    // =================================================================================
+    
+    // Fungsi ini hanya mencari SATU kotak hitam sempurna di area spesifik (ROI)
+    function findSingleFiducialInROI(grayMat, rect) {
+        // Validasi boundary ROI agar tidak error OpenCV
+        let rx = Math.max(0, rect.x), ry = Math.max(0, rect.y);
+        let rw = Math.min(grayMat.cols - rx, rect.width), rh = Math.min(grayMat.rows - ry, rect.height);
+        if (rw <= 0 || rh <= 0) return null;
+
+        let roi = grayMat.roi(new cv.Rect(rx, ry, rw, rh));
+        let thresh = new cv.Mat();
+        let bestCenter = null;
+
+        try {
+            // Adaptive thresholding super presisi untuk mengatasi bayangan
+            cv.adaptiveThreshold(roi, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
+            
+            let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
+            cv.findContours(thresh, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+            let bestArea = 0;
+            for (let i = 0; i < cnts.size(); ++i) {
+                let c = cnts.get(i), area = cv.contourArea(c);
+                
+                // Pada gambar berukuran 1200x1710, kotak 30x30px memiliki luas ~900.
+                // Kita buat rentangnya luas agar aman: 200 hingga 2500
+                if (area > 200 && area < 2500) {
+                    let bRect = cv.boundingRect(c);
+                    let aspect = bRect.width / bRect.height;
+                    let extent = area / (bRect.width * bRect.height);
+                    
+                    // FAKTA OMR: Fiducial adalah kotak hitam padat. Aspect ~ 1.0, Extent ~ 1.0
+                    // Kita saring ketat: Aspect 0.75-1.33, Solidity > 0.75
+                    if (aspect >= 0.75 && aspect <= 1.33 && extent >= 0.75) {
+                        if (area > bestArea) {
+                            bestArea = area;
+                            bestCenter = { x: rx + bRect.x + (bRect.width / 2), y: ry + bRect.y + (bRect.height / 2) };
+                        }
+                    }
+                }
+            }
+            cnts.delete(); hierarchy.delete();
+        } finally {
+            roi.delete(); thresh.delete();
+        }
+        return bestCenter;
+    }
+
+    // =================================================================================
+    // 5. KONTROL HARDWARE & TRACKER KAMERA
     // =================================================================================
     
     document.getElementById('btn-camera').addEventListener('click', async () => {
@@ -469,20 +445,8 @@
                     let ctx = overlayCanvas.getContext('2d');
                     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
                     
-                    // LANGKAH PINTAR: Tracker langsung melacak Fiducial, BUKAN kertas!
-                    let paperPts = null;
-                    let fiducialPts = findFiducialBoundingBox(mat);
-                    
-                    if (fiducialPts) {
-                        // Agar kotak hijau tracker membungkus seluruh LJK (tidak hanya di tengah fiducial)
-                        // Kita lebarkan kotak hijaunya sejauh 10%
-                        let cx = (fiducialPts[0].x + fiducialPts[1].x + fiducialPts[2].x + fiducialPts[3].x) / 4;
-                        let cy = (fiducialPts[0].y + fiducialPts[1].y + fiducialPts[2].y + fiducialPts[3].y) / 4;
-                        paperPts = fiducialPts.map(p => ({ x: cx + (p.x - cx) * 1.10, y: cy + (p.y - cy) * 1.10 }));
-                    } else {
-                        // Fallback ke metode lama untuk deteksi tracker
-                        paperPts = findUploadManualContour(mat);
-                    }
+                    // Untuk Tracker visual hijau di kamera, kita gunakan deteksi batas yang ringan
+                    let paperPts = findRoughPaperBoundary(mat); 
 
                     if (paperPts) {
                         trackerLostFrames = 0; 
@@ -558,151 +522,93 @@
         setTimeout(() => processLJKPipeline(captureCanvas, exactPtsOriginal), 100);
     }
 
-    // =================================================================================
-    // 6. PIPELINE FINAL (HYBRID FIDUCIAL DIRECT + EXTRACTION ENGINE)
-    // =================================================================================
 
-    function getBestAligned(boxes) {
-        if (boxes.length <= 3) return boxes.slice(0, 3);
-        let candidates = boxes.sort((a,b) => b.area - a.area).slice(0, 6); 
-        let bestComb = candidates.slice(0, 3);
-        let minVar = Infinity;
-        for(let i=0; i<candidates.length-2; i++) {
-            for(let j=i+1; j<candidates.length-1; j++) {
-                for(let k=j+1; k<candidates.length; k++) {
-                    let c = [candidates[i], candidates[j], candidates[k]];
-                    let meanX = (c[0].x + c[1].x + c[2].x) / 3;
-                    let varX = Math.pow(c[0].x-meanX,2) + Math.pow(c[1].x-meanX,2) + Math.pow(c[2].x-meanX,2);
-                    if (varX < minVar) { minVar = varX; bestComb = c; }
-                }
-            }
-        }
-        return bestComb.sort((a,b) => a.y - b.y);
-    }
+    // =================================================================================
+    // 6. PIPELINE FINAL (DUAL-WARP & ROI BULLSEYE OMR)
+    // =================================================================================
 
     function processLJKPipeline(canvas, exactPts = null) {
         let src = null, roughWarped = null, strictWarpedMat = null; 
         try {
             src = cv.imread(canvas);
-            let paperPts = null;
             
-            // -------------------------------------------------------------------------
-            // PENARGETAN BARU: Langsung cari Fiducial Hitam (Rahasia Tes Plus)
-            // -------------------------------------------------------------------------
-            logAI("Menganalisis Koordinat Fiducial Secara Langsung...");
-            let fiducialPts = findFiducialBoundingBox(src); 
+            // FASE 1: ROUGH WARP (Penyamarataan Area Kertas)
+            logAI("Fase 1: Meratakan Perspektif Area Kertas...");
+            let paperPts = findRoughPaperBoundary(src); 
             
-            if (fiducialPts) {
-                logAI("Fiducial terkunci! Mengekspansi 10% untuk pemotongan sempurna...");
-                // Kita telah menemukan 4 sudut fiducial di dunia nyata.
-                // Sekarang kita lebarkan titik tersebut 10% agar saat dipotong, 
-                // fiducial jatuh dengan aman *di dalam* gambar, bukan tepat di tepinya.
-                let cx = (fiducialPts[0].x + fiducialPts[1].x + fiducialPts[2].x + fiducialPts[3].x) / 4;
-                let cy = (fiducialPts[0].y + fiducialPts[1].y + fiducialPts[2].y + fiducialPts[3].y) / 4;
-                paperPts = fiducialPts.map(p => ({
-                    x: Math.max(0, Math.min(src.cols, cx + (p.x - cx) * 1.10)),
-                    y: Math.max(0, Math.min(src.rows, cy + (p.y - cy) * 1.10))
-                }));
-            } else {
-                logAI("Fiducial tak terlihat di frame utama. Menggunakan Tepi Kertas...", true);
-                paperPts = findUploadManualContour(src); 
-            }
-
-            // Jika semua gagal (misal difoto SUPER dekat sampai kertas tidak terlihat),
-            // kita gunakan koordinat tracker terakhir yang hijau tadi.
             if (!paperPts && exactPts) {
-                logAI("Fallback Tracker diaktifkan...", true);
-                paperPts = exactPts;
+                logAI("Menggunakan data Pelacakan Kamera...", true);
+                let cx = (exactPts[0].x + exactPts[1].x + exactPts[2].x + exactPts[3].x) / 4;
+                let cy = (exactPts[0].y + exactPts[1].y + exactPts[2].y + exactPts[3].y) / 4;
+                paperPts = exactPts.map(p => ({
+                    x: Math.max(0, Math.min(src.cols, cx + (p.x - cx) * 1.05)),
+                    y: Math.max(0, Math.min(src.rows, cy + (p.y - cy) * 1.05))
+                }));
             }
 
             if (!paperPts) {
-                logAI("Memproses Layar Penuh (Close-Up Murni)...", true);
+                logAI("Memproses Full-Frame (Close-up)...", true);
                 paperPts = [ {x: 0, y: 0}, {x: src.cols, y: 0}, {x: src.cols, y: src.rows}, {x: 0, y: src.rows} ];
             }
 
-            let d1 = Math.hypot(paperPts[0].x - paperPts[1].x, paperPts[0].y - paperPts[1].y);
-            let d2 = Math.hypot(paperPts[1].x - paperPts[2].x, paperPts[1].y - paperPts[2].y);
-            let d3 = Math.hypot(paperPts[2].x - paperPts[3].x, paperPts[2].y - paperPts[3].y);
-            let d4 = Math.hypot(paperPts[3].x - paperPts[0].x, paperPts[3].y - paperPts[0].y);
-            
-            let pW = (d1 + d3) / 2.0, pH = (d2 + d4) / 2.0;
-            let ROUGH_W = 1200; 
-            let ratio = Math.max(pH, pW) / Math.min(pH, pW); 
-            let calculated_H = Math.round(ROUGH_W * ratio);
-            
-            if (calculated_H < 1500) calculated_H = 1500; 
-            if (calculated_H > 2100) calculated_H = 2100; 
-            let ROUGH_H = calculated_H;
-            
-            let dstArray = (pW > pH) ? [ ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H, 0, 0 ] : [ 0, 0, ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H ];
+            // Kita warp (tarik) gambar aslinya menjadi ukuran fix 1200x1710 terlebih dahulu.
+            // Di ukuran rata inilah kita bisa menarget kotak hitam tanpa nyasar ke teks siswa.
             let srcPtsMat = cv.matFromArray(4, 1, cv.CV_32FC2, [paperPts[0].x, paperPts[0].y, paperPts[1].x, paperPts[1].y, paperPts[2].x, paperPts[2].y, paperPts[3].x, paperPts[3].y]);
-            let dstPtsMat = cv.matFromArray(4, 1, cv.CV_32FC2, dstArray);
+            let dstPtsMat = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, FIDUCIAL_WARP_W, 0, FIDUCIAL_WARP_W, FIDUCIAL_WARP_H, 0, FIDUCIAL_WARP_H]);
 
             roughWarped = new cv.Mat();
-            let M = cv.getPerspectiveTransform(srcPtsMat, dstPtsMat);
-            cv.warpPerspective(src, roughWarped, M, new cv.Size(ROUGH_W, ROUGH_H));
-            srcPtsMat.delete(); dstPtsMat.delete(); M.delete();
+            let M_rough = cv.getPerspectiveTransform(srcPtsMat, dstPtsMat);
+            cv.warpPerspective(src, roughWarped, M_rough, new cv.Size(FIDUCIAL_WARP_W, FIDUCIAL_WARP_H));
+            srcPtsMat.delete(); dstPtsMat.delete(); M_rough.delete();
 
-            // -------------------------------------------------------------------------
-            // MESIN EKSTRAKSI UTAMA YANG SUDAH AKURAT (TIDAK DIUBAH)
-            // -------------------------------------------------------------------------
-            logAI("Menyelaraskan 6 Garis Matriks...");
-            let gray = new cv.Mat(), thresh = new cv.Mat();
+            // FASE 2: THE "ROI BULLSEYE" FIDUCIAL HUNT (Rahasia Akurasi Mutlak)
+            logAI("Fase 2: Ekstraksi Fiducial ROI Bullseye...");
+            let gray = new cv.Mat();
             cv.cvtColor(roughWarped, gray, cv.COLOR_RGBA2GRAY, 0);
 
-            let claheFiducial = new cv.CLAHE(2.0, new cv.Size(8, 8));
-            claheFiducial.apply(gray, gray); claheFiducial.delete();
-
-            cv.GaussianBlur(gray, gray, new cv.Size(3, 3), 0); 
-            cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
+            // Karena kita sudah meratakan gambar ke 1200x1710, kita PASTI TAHU perkiraan lokasi 6 kotak hitam.
+            // Kita siapkan "jaring tangkap" (Region of Interest) berukuran lebar untuk memburu kotaknya.
+            // Tidak peduli jika kertas agak miring atau lengkung, kotak hitam pasti ada di area jaring ini.
+            let boxW = 250, boxH = 300; 
             
-            let marginW = Math.floor(ROUGH_W * 0.25); 
-            let marginH = Math.floor(ROUGH_H * 0.02); 
+            // Jaring Tangkap Kiri (Atas, Tengah, Bawah)
+            let roi_TL = new cv.Rect(0, 0, boxW, boxH);
+            let roi_ML = new cv.Rect(0, (FIDUCIAL_WARP_H / 2) - (boxH / 2), boxW, boxH);
+            let roi_BL = new cv.Rect(0, FIDUCIAL_WARP_H - boxH, boxW, boxH);
             
-            let centerMask = thresh.roi(new cv.Rect(marginW, 0, ROUGH_W - (2 * marginW), ROUGH_H));
-            centerMask.setTo(new cv.Scalar(0)); centerMask.delete();
-            let roiTop = thresh.roi(new cv.Rect(0, 0, ROUGH_W, marginH)); roiTop.setTo(new cv.Scalar(0)); roiTop.delete();
-            let roiBot = thresh.roi(new cv.Rect(0, ROUGH_H - marginH, ROUGH_W, marginH)); roiBot.setTo(new cv.Scalar(0)); roiBot.delete();
+            // Jaring Tangkap Kanan (Atas, Tengah, Bawah)
+            let roi_TR = new cv.Rect(FIDUCIAL_WARP_W - boxW, 0, boxW, boxH);
+            let roi_MR = new cv.Rect(FIDUCIAL_WARP_W - boxW, (FIDUCIAL_WARP_H / 2) - (boxH / 2), boxW, boxH);
+            let roi_BR = new cv.Rect(FIDUCIAL_WARP_W - boxW, FIDUCIAL_WARP_H - boxH, boxW, boxH);
 
-            let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-            cv.morphologyEx(thresh, thresh, cv.MORPH_OPEN, kernel); 
-            cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel); 
-            kernel.delete();
+            let TL = findSingleFiducialInROI(gray, roi_TL);
+            let ML = findSingleFiducialInROI(gray, roi_ML);
+            let BL = findSingleFiducialInROI(gray, roi_BL);
+            let TR = findSingleFiducialInROI(gray, roi_TR);
+            let MR = findSingleFiducialInROI(gray, roi_MR);
+            let BR = findSingleFiducialInROI(gray, roi_BR);
 
-            let contours = new cv.MatVector(), hierarchy = new cv.Mat();
-            cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+            gray.delete();
 
-            let leftBoxes = [], rightBoxes = [];
-            for (let i = 0; i < contours.size(); ++i) {
-                let cnt = contours.get(i), area = cv.contourArea(cnt);
-                if (area > 80 && area < 10000) {
-                    let rect = cv.boundingRect(cnt);
-                    let aspect = rect.width / rect.height, extent = area / (rect.width * rect.height);
-                    if (aspect >= 0.3 && aspect <= 3.0 && extent >= 0.4) {
-                        let cx = rect.x + rect.width / 2, cy = rect.y + rect.height / 2;
-                        if (cx < marginW) leftBoxes.push({x: cx, y: cy, area: area}); 
-                        else if (cx > ROUGH_W - marginW) rightBoxes.push({x: cx, y: cy, area: area});
-                    }
-                }
-            }
-            gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
+            // Fallback Cerdas: Jika 1 atau 2 kotak tertutup noda/tangan, kita tebak posisinya 
+            // menggunakan garis lurus dari kotak yang berhasil ditemukan.
+            if (!TL && ML && BL) TL = { x: ML.x, y: ML.y - (BL.y - ML.y) };
+            if (!BL && ML && TL) BL = { x: ML.x, y: ML.y + (ML.y - TL.y) };
+            if (!TR && MR && BR) TR = { x: MR.x, y: MR.y - (BR.y - MR.y) };
+            if (!BR && MR && TR) BR = { x: MR.x, y: MR.y + (MR.y - TR.y) };
+            // Jika yang hilang tengah, letakkan pas di tengah-tengah
+            if (!ML && TL && BL) ML = { x: (TL.x + BL.x) / 2, y: (TL.y + BL.y) / 2 };
+            if (!MR && TR && BR) MR = { x: (TR.x + BR.x) / 2, y: (TR.y + BR.y) / 2 };
 
-            let leftSide = getBestAligned(leftBoxes);
-            let rightSide = getBestAligned(rightBoxes);
-
-            logAI(`Fiducial Final -> Kiri: ${leftSide.length}, Kanan: ${rightSide.length}`);
-
-            if (leftSide.length < 3 || rightSide.length < 3) {
-                throw new Error(`Fiducial Gagal (Kiri: ${leftSide.length}/3, Kanan: ${rightSide.length}/3).`);
+            if (!TL || !ML || !BL || !TR || !MR || !BR) {
+                throw new Error("Gagal mengunci ke-6 kotak Fiducial di sudut LJK. Pemotongan dibatalkan agar nilai tidak salah.");
             }
 
-            let TL, ML, BL, TR, MR, BR;
-            let distTopMid = (leftSide[1].y - leftSide[0].y) + (rightSide[1].y - rightSide[0].y);
-            let distMidBot = (leftSide[2].y - leftSide[1].y) + (rightSide[2].y - rightSide[1].y);
-
-            if (distTopMid < distMidBot) { TL = rightSide[2]; ML = rightSide[1]; BL = rightSide[0]; TR = leftSide[2]; MR = leftSide[1]; BR = leftSide[0]; } 
-            else { TL = leftSide[0]; ML = leftSide[1]; BL = leftSide[2]; TR = rightSide[0]; MR = rightSide[1]; BR = rightSide[2]; }
-
+            logAI("Fiducial Bullseye Terkunci. Memulai Micro-Warping...");
+            
+            // FASE 3: DUAL-WARP MICRO ALIGNMENT
+            // Kini kita memiliki koordinat 6 kotak hitam secara absolut tanpa gangguan teks/arsiran.
+            // Kita potong gambar dari ujung tengah (ML-MR) untuk meluruskan lengkungan kertas akibat foto kamera.
             strictWarpedMat = new cv.Mat.zeros(FIDUCIAL_WARP_H, FIDUCIAL_WARP_W, cv.CV_8UC4);
             let targetMidY = Math.round(FIDUCIAL_WARP_H * ((Math.hypot(TL.x-ML.x, TL.y-ML.y)/Math.hypot(TL.x-BL.x, TL.y-BL.y) + Math.hypot(TR.x-MR.x, TR.y-MR.y)/Math.hypot(TR.x-BR.x, TR.y-BR.y)) / 2));
 
@@ -723,14 +629,15 @@
 
             document.getElementById('result-canvas').width = FIDUCIAL_WARP_W; document.getElementById('result-canvas').height = FIDUCIAL_WARP_H;
             
+            // Masuk ke Mesin Deteksi Nilai
             let isSuccess = performExtraction(strictWarpedMat, true);
             if (!isSuccess) {
                 logAI("Mendeteksi LJK Terbalik! Auto-Flip 180 Derajat...");
                 cv.rotate(strictWarpedMat, strictWarpedMat, cv.ROTATE_180);
                 isSuccess = performExtraction(strictWarpedMat, true); 
                 if (!isSuccess) {
-                    logAI("Gagal membaca Identitas LJK.", true);
-                    showCustomAlert("LJK gagal diproses. Pastikan LJK jelas dan tidak terpotong.");
+                    logAI("Gagal membaca Identitas. Pastikan nama dihitamkan dengan jelas.", true);
+                    showCustomAlert("Identitas tidak terbaca. Pastikan bulatan nama terisi cukup gelap.");
                 }
             }
 
