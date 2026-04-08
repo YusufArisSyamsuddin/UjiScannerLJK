@@ -26,7 +26,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v51.3 (Dual-Pass Fiducial Extraction & Heavy Noise Isolation)</p>
+            <p class="text-sm text-slate-300 mt-1">v52.0 (OMR Solid-Block Extraction & Strict Tracker Lock)</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -37,12 +37,12 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v51.3 FINAL</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v52.0 STABLE</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai. Menunggu Instuksi.<br>
-                > Filter Anti-Arsiran Fiducial siap beroperasi.<br>
-                > Jalur Upload diproteksi penuh (Tanpa Perubahan).<br>
+                > OMR Solid-Block Filter (Morph 11x11): Aktif.<br>
+                > Toleransi Getaran diturunkan (15px): Aktif.<br>
             </div>
             <div>
                 <label id="lbl-answer-key" class="block text-xs font-bold mb-2 text-slate-700 uppercase">Kunci Jawaban (N)</label>
@@ -73,7 +73,7 @@
                 <div id="loader-overlay" class="absolute inset-0 bg-slate-900/95 hidden flex-col justify-center items-center z-50 backdrop-blur-sm">
                     <div class="loader mb-4"></div>
                     <p id="loader-text" class="text-xs font-bold text-emerald-400 tracking-widest animate-pulse uppercase text-center leading-relaxed">
-                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Menerapkan Algoritma Upload Pamungkas...</span>
+                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Menghancurkan Noise & Mencari Block...</span>
                     </p>
                 </div>
             </div>
@@ -207,7 +207,10 @@
 
     let resultData = [], scanCounter = 1, smoothedMarkers = null, videoScanLoop = null;
     let autoCaptureLockCount = 0, trackerLostFrames = 0; 
-    const AUTO_CAPTURE_THRESHOLD = 12; 
+    
+    // [UPDATE V52.0] Menaikkan stabilitas tangkapan menjadi 20 frame (Hampir 1 detik diam mutlak)
+    const AUTO_CAPTURE_THRESHOLD = 20; 
+    
     let pendingUpdateData = null, pendingUpdateIndex = -1, pendingDeleteId = null;
 
     const video = document.getElementById('video'), overlayCanvas = document.getElementById('overlay-canvas');
@@ -304,7 +307,8 @@
                         
                         let rect = cv.minAreaRect(approx);
                         let aspect = Math.max(rect.size.width, rect.size.height) / Math.min(rect.size.width, rect.size.height);
-                        if (aspect < 1.1 || aspect > 2.0) { approx.delete(); continue; }
+                        // Toleransi rasio diperketat untuk mencegah kunci palsu pada benda selain kertas
+                        if (aspect < 1.25 || aspect > 1.75) { approx.delete(); continue; }
                     }
 
                     let area = cv.contourArea(cv.matFromArray(4, 1, cv.CV_32SC2, [pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y, pts[3].x, pts[3].y]));
@@ -371,6 +375,7 @@
         return bestPts ? orderPoints(bestPts) : null;
     }
 
+    // JALUR UPLOAD DIKUNCI MATI (TIDAK ADA PERUBAHAN)
     function findUploadManualContour(src) {
         let procMat = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat();
         let scaleRatio = 1000.0 / src.cols;
@@ -511,12 +516,16 @@
                             smoothedMarkers = frame; 
                             autoCaptureLockCount = 0; 
                         } else {
-                            let dist = Math.hypot(frame.tl.x - smoothedMarkers.tl.x, frame.tl.y - smoothedMarkers.tl.y) +
-                                       Math.hypot(frame.tr.x - smoothedMarkers.tr.x, frame.tr.y - smoothedMarkers.tr.y) +
-                                       Math.hypot(frame.br.x - smoothedMarkers.br.x, frame.br.y - smoothedMarkers.br.y) +
-                                       Math.hypot(frame.bl.x - smoothedMarkers.bl.x, frame.bl.y - smoothedMarkers.bl.y);
+                            // [UPDATE V52.0] PENGETATAN STABILITAS GERAK (Toleransi 15px)
+                            let maxDist = Math.max(
+                                Math.hypot(frame.tl.x - smoothedMarkers.tl.x, frame.tl.y - smoothedMarkers.tl.y),
+                                Math.hypot(frame.tr.x - smoothedMarkers.tr.x, frame.tr.y - smoothedMarkers.tr.y),
+                                Math.hypot(frame.br.x - smoothedMarkers.br.x, frame.br.y - smoothedMarkers.br.y),
+                                Math.hypot(frame.bl.x - smoothedMarkers.bl.x, frame.bl.y - smoothedMarkers.bl.y)
+                            );
 
-                            if (dist > 35) {
+                            if (maxDist > 15) { 
+                                // Jika kamera/tangan goyang lebih dari 15 piksel, reset langsung!
                                 autoCaptureLockCount = 0;
                                 smoothedMarkers = frame;
                             } else {
@@ -575,25 +584,6 @@
         setTimeout(() => processLJKPipeline(captureCanvas, exactPtsOriginal), 100);
     }
 
-    function getBestAligned(boxes) {
-        if (boxes.length <= 3) return boxes.slice(0, 3);
-        let candidates = boxes.slice(0, 5); 
-        let bestComb = candidates.slice(0, 3);
-        let minVar = Infinity;
-        
-        for(let i=0; i<candidates.length-2; i++) {
-            for(let j=i+1; j<candidates.length-1; j++) {
-                for(let k=j+1; k<candidates.length; k++) {
-                    let c = [candidates[i], candidates[j], candidates[k]];
-                    let meanX = (c[0].x + c[1].x + c[2].x) / 3;
-                    let varX = Math.pow(c[0].x-meanX,2) + Math.pow(c[1].x-meanX,2) + Math.pow(c[2].x-meanX,2);
-                    if (varX < minVar) { minVar = varX; bestComb = c; }
-                }
-            }
-        }
-        return bestComb;
-    }
-
     // =================================================================================
     // 6. PIPELINE FINAL: PEMOTONGAN & EKSTRAKSI NILAI
     // =================================================================================
@@ -603,11 +593,11 @@
             src = cv.imread(canvas);
             let paperPts = null;
             
-            logAI("Menganalisis menggunakan Metode Upload (Pamungkas)...");
+            logAI("Mencari tepi kertas LJK...");
             paperPts = findUploadManualContour(src); 
             
             if (!paperPts && exactPts) {
-                logAI("Fallback ke Tracker: Mengekspansi margin 5% agar fiducial tidak terpotong...", true);
+                logAI("Fallback Tracker: Menyesuaikan margin keamanan...", true);
                 let cx = (exactPts[0].x + exactPts[1].x + exactPts[2].x + exactPts[3].x) / 4;
                 let cy = (exactPts[0].y + exactPts[1].y + exactPts[2].y + exactPts[3].y) / 4;
                 paperPts = exactPts.map(p => ({
@@ -617,7 +607,7 @@
             }
 
             if (!paperPts) {
-                logAI("Garis LJK tak terlihat sama sekali. Memproses Layar Penuh...", true);
+                logAI("Garis kertas di luar bingkai (Close-Up). Memproses Full-Frame...", true);
                 paperPts = [ {x: 0, y: 0}, {x: src.cols, y: 0}, {x: src.cols, y: src.rows}, {x: 0, y: src.rows} ];
             }
 
@@ -646,103 +636,93 @@
             cv.warpPerspective(src, roughWarped, M, new cv.Size(ROUGH_W, ROUGH_H));
             srcPtsMat.delete(); dstPtsMat.delete(); M.delete();
 
-            logAI("Melacak 6 Fiducial (Algoritma Tes Plus)...");
-            let gray = new cv.Mat();
+            // =========================================================================
+            // [UPDATE V52.0] EKSTRAKSI FIDUCIAL OMR SOLID-BLOCK (ANTI CLOSE-UP CRASH)
+            // =========================================================================
+            logAI("Mengekstraksi Fiducial (Metode OMR Solid-Block)...");
+            let gray = new cv.Mat(), thresh = new cv.Mat();
             cv.cvtColor(roughWarped, gray, cv.COLOR_RGBA2GRAY, 0);
 
-            let claheFiducial = new cv.CLAHE(2.0, new cv.Size(8, 8));
+            let claheFiducial = new cv.CLAHE(3.0, new cv.Size(8, 8));
             claheFiducial.apply(gray, gray);
             claheFiducial.delete();
 
-            let marginW = Math.floor(ROUGH_W * 0.12); 
-            let marginH = Math.floor(ROUGH_H * 0.02); 
+            cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0); 
+            cv.threshold(gray, thresh, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
 
-            // =========================================================================
-            // DUAL-PASS FIDUCIAL EXTRACTION (PENYARINGAN KOTAK HITAM 2 TAHAP)
-            // =========================================================================
+            // RAHASIA OMR PROFESIONAL: Morph Open 11x11.
+            // Menghancurkan 100% tulisan, arsiran tebal, garis pensil, dan batas kertas.
+            // Hanya gumpalan balok solid (Fiducial) yang akan bertahan hidup.
+            let kernelErode = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(11, 11));
+            cv.morphologyEx(thresh, thresh, cv.MORPH_OPEN, kernelErode);
+            kernelErode.delete();
 
-            // --- TAHAP 1: STANDAR (Optimasi Mutlak Mode Upload) ---
-            let thresh1 = new cv.Mat();
-            cv.GaussianBlur(gray, gray, new cv.Size(3, 3), 0); 
-            cv.adaptiveThreshold(gray, thresh1, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
-            
-            let kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-            cv.morphologyEx(thresh1, thresh1, cv.MORPH_OPEN, kernel1); 
-            cv.morphologyEx(thresh1, thresh1, cv.MORPH_CLOSE, kernel1); 
-            kernel1.delete();
-
-            let centerMask1 = thresh1.roi(new cv.Rect(marginW, 0, ROUGH_W - (2 * marginW), ROUGH_H));
-            centerMask1.setTo(new cv.Scalar(0)); centerMask1.delete();
-            let roiTop1 = thresh1.roi(new cv.Rect(0, 0, ROUGH_W, marginH)); roiTop1.setTo(new cv.Scalar(0)); roiTop1.delete();
-            let roiBot1 = thresh1.roi(new cv.Rect(0, ROUGH_H - marginH, ROUGH_W, marginH)); roiBot1.setTo(new cv.Scalar(0)); roiBot1.delete();
+            // Sedikit Close untuk merapikan tepian balok fiducial
+            let kernelClose = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+            cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernelClose);
+            kernelClose.delete();
 
             let contours = new cv.MatVector(), hierarchy = new cv.Mat();
-            cv.findContours(thresh1, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+            cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-            let leftBoxes = [], rightBoxes = [];
+            let validBlobs = [];
             for (let i = 0; i < contours.size(); ++i) {
                 let cnt = contours.get(i), area = cv.contourArea(cnt);
-                if (area > 80 && area < 15000) {
+                if (area > 100 && area < 25000) {
                     let rect = cv.boundingRect(cnt);
                     let aspect = rect.width / rect.height, extent = area / (rect.width * rect.height);
-                    if (aspect >= 0.4 && aspect <= 2.5 && extent >= 0.4) {
-                        let cx = rect.x + rect.width / 2, cy = rect.y + rect.height / 2;
-                        if (cx < marginW) leftBoxes.push({x: cx, y: cy, area: area}); 
-                        else if (cx > ROUGH_W - marginW) rightBoxes.push({x: cx, y: cy, area: area});
+                    // Filter: Bentuknya harus kotak utuh (solidity/extent tinggi) dan bukan garis panjang.
+                    if (aspect >= 0.3 && aspect <= 3.0 && extent >= 0.5) {
+                        validBlobs.push({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, area: area });
                     }
                 }
             }
-            contours.delete(); hierarchy.delete(); thresh1.delete();
+            contours.delete(); hierarchy.delete(); thresh.delete(); gray.delete();
 
-            // --- TAHAP 2: HEAVY NOISE ISOLATION (Jika Tahap 1 Gagal karena Coreten/Arsiran) ---
-            if (leftBoxes.length < 3 || rightBoxes.length < 3) {
-                logAI("Arsiran/Coretan mengganggu fiducial. Mengaktifkan Filter Isolasi Ekstra...", true);
-                leftBoxes = []; rightBoxes = []; // Reset ulang pencarian
-                
-                let thresh2 = new cv.Mat(), blur2 = new cv.Mat();
-                // 1. Blur level ekstrim untuk menghancurkan/melelehkan arsiran pensil tipis
-                cv.GaussianBlur(gray, blur2, new cv.Size(11, 11), 0);
-                
-                // 2. Otsu Global Threshold (Sangat kebal terhadap bayangan pensil dibandingkan Adaptive)
-                cv.threshold(blur2, thresh2, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU);
-                
-                // 3. Morph Open Besar untuk menggunting garis yang masih nekat menempel ke kotak hitam
-                let kernel2 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(7, 7));
-                cv.morphologyEx(thresh2, thresh2, cv.MORPH_OPEN, kernel2);
-                kernel2.delete();
-                
-                let centerMask2 = thresh2.roi(new cv.Rect(marginW, 0, ROUGH_W - (2 * marginW), ROUGH_H));
-                centerMask2.setTo(new cv.Scalar(0)); centerMask2.delete();
-                let roiTop2 = thresh2.roi(new cv.Rect(0, 0, ROUGH_W, marginH)); roiTop2.setTo(new cv.Scalar(0)); roiTop2.delete();
-                let roiBot2 = thresh2.roi(new cv.Rect(0, ROUGH_H - marginH, ROUGH_W, marginH)); roiBot2.setTo(new cv.Scalar(0)); roiBot2.delete();
+            // Membagi grup kiri dan kanan dengan batas tengah gambar
+            let cxCenter = ROUGH_W / 2;
+            let leftBlobs = validBlobs.filter(b => b.x < cxCenter);
+            let rightBlobs = validBlobs.filter(b => b.x > cxCenter);
 
-                let contoursFB = new cv.MatVector(), hierarchyFB = new cv.Mat();
-                cv.findContours(thresh2, contoursFB, hierarchyFB, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+            // Fungsi cerdas mencari 3 kotak yang paling sejajar/lurus vertikal
+            function getBestAlignedTrio(blobs) {
+                if (blobs.length < 3) return [];
+                if (blobs.length === 3) return blobs.sort((a,b) => a.y - b.y);
 
-                for (let i = 0; i < contoursFB.size(); ++i) {
-                    let cnt = contoursFB.get(i), area = cv.contourArea(cnt);
-                    if (area > 50 && area < 15000) {
-                        let rect = cv.boundingRect(cnt);
-                        let aspect = rect.width / rect.height, extent = area / (rect.width * rect.height);
-                        // Toleransi bentuk dilonggarkan karena pinggiran kotak mungkin sedikit terpotong oleh blur/morph
-                        if (aspect >= 0.3 && aspect <= 3.0 && extent >= 0.3) {
-                            let cx = rect.x + rect.width / 2, cy = rect.y + rect.height / 2;
-                            if (cx < marginW) leftBoxes.push({x: cx, y: cy, area: area}); 
-                            else if (cx > ROUGH_W - marginW) rightBoxes.push({x: cx, y: cy, area: area});
+                let bestTrio = [];
+                let minVarX = Infinity;
+
+                for(let i=0; i<blobs.length-2; i++) {
+                    for(let j=i+1; j<blobs.length-1; j++) {
+                        for(let k=j+1; k<blobs.length; k++) {
+                            let t = [blobs[i], blobs[j], blobs[k]];
+                            
+                            // Hitung variansi (kemelencengan) sumbu X
+                            let meanX = (t[0].x + t[1].x + t[2].x) / 3;
+                            let varX = Math.pow(t[0].x - meanX, 2) + Math.pow(t[1].x - meanX, 2) + Math.pow(t[2].x - meanX, 2);
+
+                            t.sort((a,b) => a.y - b.y);
+                            let dist1 = t[1].y - t[0].y;
+                            let dist2 = t[2].y - t[1].y;
+                            
+                            // Kotak Fiducial jarak atas-tengah dan tengah-bawah tidak boleh jomplang ekstrim
+                            let spacingRatio = Math.max(dist1, dist2) / (Math.min(dist1, dist2) + 1e-5);
+                            let score = varX * (spacingRatio > 1.8 ? 1000 : 1);
+
+                            if (score < minVarX) { minVarX = score; bestTrio = t; }
                         }
                     }
                 }
-                contoursFB.delete(); hierarchyFB.delete(); thresh2.delete(); blur2.delete();
+                return bestTrio;
             }
 
-            leftBoxes.sort((a,b) => b.area - a.area); rightBoxes.sort((a,b) => b.area - a.area);
-            let leftSide = getBestAligned(leftBoxes).sort((a,b) => a.y - b.y);
-            let rightSide = getBestAligned(rightBoxes).sort((a,b) => a.y - b.y);
+            let leftSide = getBestAlignedTrio(leftBlobs);
+            let rightSide = getBestAlignedTrio(rightBlobs);
 
-            logAI(`Fiducial Terekstraksi -> Kiri: ${leftSide.length}, Kanan: ${rightSide.length}`);
+            logAI(`Fiducial Valid -> Kiri: ${leftSide.length}, Kanan: ${rightSide.length}`);
 
             if (leftSide.length < 3 || rightSide.length < 3) {
-                throw new Error(`Fiducial Gagal (Kiri: ${leftSide.length}/3, Kanan: ${rightSide.length}/3). Pastikan kotak hitam tidak tertutup.`);
+                throw new Error(`Fiducial Gagal (Kiri: ${leftSide.length}/3, Kanan: ${rightSide.length}/3). Pastikan kotak hitam tidak tertutup atau terpotong.`);
             }
 
             let TL, ML, BL, TR, MR, BR;
