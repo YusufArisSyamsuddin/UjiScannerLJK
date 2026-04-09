@@ -26,7 +26,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v84.0 (Full Frame Edge-Lock & Anti Cembung)</p>
+            <p class="text-sm text-slate-300 mt-1">v85.0 (Absolute Precision Dual-Warp & Fisheye Fix)</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -37,14 +37,14 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v84.0 FINAL</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v85.0 FINAL</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai. Menunggu Instruksi...<br>
                 > Audit: Memory Leak Guard Aktif.<br>
-                > Audit: Race Condition Guard Aktif.<br>
-                > Kamera: Edge-Lock Max Frame & Lens Correction Aktif.<br>
-                > Pipeline: Dual-Warp Array Strategy Aktif.<br>
+                > Kamera: Edge-Lock Bypass Tracker (Anti-Meleset).<br>
+                > Upload: Global Fiducial Dot Search Aktif.<br>
+                > Engine: Dual-Warp 1200x1710 (Geometry Fix).<br>
             </div>
             <div>
                 <label id="lbl-answer-key" class="block text-xs font-bold mb-2 text-slate-700 uppercase">Kunci Jawaban (N)</label>
@@ -74,7 +74,7 @@
                 <div id="loader-overlay" class="absolute inset-0 bg-slate-900/95 hidden flex-col justify-center items-center z-50 backdrop-blur-sm">
                     <div class="loader mb-4"></div>
                     <p id="loader-text" class="text-xs font-bold text-emerald-400 tracking-widest animate-pulse uppercase text-center leading-relaxed">
-                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Menetralkan Bayangan & Memotong...</span>
+                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Menjahit & Mengekstrak Nilai...</span>
                     </p>
                 </div>
             </div>
@@ -195,6 +195,7 @@
     const GRID_SIZE = 30;
     const FIDUCIAL_WARP_W = 40 * GRID_SIZE; // 1200 px
     const FIDUCIAL_WARP_H = 57 * GRID_SIZE; // 1710 px
+    const TARGET_MID_Y = 889; // 52% Ratio LJK
     const START_X = 1 * GRID_SIZE, START_Y = 3 * GRID_SIZE;
     const GRID_COLS = 38, GRID_ROWS = 53;
 
@@ -211,7 +212,7 @@
 
     let resultData = [], scanCounter = 1, videoScanLoop = null;
     let autoCaptureLockCount = 0; 
-    let isProcessing = false; // FLAG AUDIT: Mencegah Race Condition ganda
+    let isProcessing = false; 
     let pendingUpdateData = null, pendingUpdateIndex = -1, pendingDeleteId = null;
 
     const AUTO_CAPTURE_THRESHOLD = 15; 
@@ -267,7 +268,7 @@
     const checkCV = setInterval(() => { if (typeof cv !== 'undefined' && cv.Mat) { clearInterval(checkCV); document.getElementById('cv-status').innerHTML = '<div class="w-3 h-3 rounded-full bg-emerald-500"></div> OpenCV Siap'; } }, 500);
 
     // =================================================================================
-    // 3. CORE COMPUTER VISION ALGORITHMS (MEMORY LEAK GUARDED)
+    // 3. CORE COMPUTER VISION (GLOBAL FIDUCIAL SEARCH - ANTI BERANTAKAN)
     // =================================================================================
 
     function orderPoints(pts) {
@@ -281,10 +282,130 @@
         return sorted;
     }
 
-    function findBestQuad(threshMat, scaleRatio, isTrackerMode, imgArea, cxCenter, cyCenter) {
+    function findFiducialsGlobal(src) {
+        let proc = new cv.Mat(), gray = new cv.Mat(), thresh = new cv.Mat();
+        let cnts = new cv.MatVector(), hier = new cv.Mat();
+        let scale = 1000.0 / Math.max(src.cols, src.rows);
+        
+        try {
+            cv.resize(src, proc, new cv.Size(Math.round(src.cols * scale), Math.round(src.rows * scale)));
+            cv.cvtColor(proc, gray, cv.COLOR_RGBA2GRAY, 0);
+
+            let clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
+            clahe.apply(gray, gray); clahe.delete();
+
+            cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+            cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
+
+            cv.findContours(thresh, cnts, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+            let blobs = [];
+            for(let i=0; i < cnts.size(); i++) {
+                let c = cnts.get(i), area = cv.contourArea(c);
+                if (area > 20 && area < 4000) { 
+                    let r = cv.boundingRect(c);
+                    let aspect = r.width / r.height;
+                    if (aspect > 0.4 && aspect < 2.5 && (area / (r.width * r.height)) > 0.4) {
+                        let M = cv.moments(c);
+                        blobs.push({ x: (M.m10 / M.m00), y: (M.m01 / M.m00) });
+                    }
+                }
+            }
+
+            if (blobs.length < 6) return null;
+
+            blobs.sort((a,b) => a.x - b.x);
+            let midIdx = Math.floor(blobs.length / 2);
+            let lefts = blobs.slice(0, midIdx);
+            let rights = blobs.slice(midIdx);
+
+            function getBest3(pts) {
+                if (pts.length < 3) return null;
+                pts.sort((a,b) => a.y - b.y);
+                let best = null, maxScore = -Infinity;
+                for(let i=0; i < pts.length - 2; i++) {
+                    for(let j=i+1; j < pts.length - 1; j++) {
+                        for(let k=j+1; k < pts.length; k++) {
+                            let spanY = pts[k].y - pts[i].y;
+                            if (spanY < proc.rows * 0.4) continue; // Span minimal 40% tinggi kertas
+
+                            let meanX = (pts[i].x + pts[j].x + pts[k].x) / 3;
+                            let varX = Math.pow(pts[i].x - meanX, 2) + Math.pow(pts[j].x - meanX, 2) + Math.pow(pts[k].x - meanX, 2);
+
+                            let midRatio = (pts[j].y - pts[i].y) / spanY;
+                            let midPenalty = Math.abs(midRatio - 0.52) * 2000; // Penalti jika melenceng dari rasio ideal LJK
+
+                            let score = spanY - varX - midPenalty;
+                            if (score > maxScore) { maxScore = score; best = [pts[i], pts[j], pts[k]]; }
+                        }
+                    }
+                }
+                return best;
+            }
+
+            let l3 = getBest3(lefts), r3 = getBest3(rights);
+            if (!l3 || !r3) return null;
+
+            return {
+                TL: {x: l3[0].x / scale, y: l3[0].y / scale},
+                ML: {x: l3[1].x / scale, y: l3[1].y / scale},
+                BL: {x: l3[2].x / scale, y: l3[2].y / scale},
+                TR: {x: r3[0].x / scale, y: r3[0].y / scale},
+                MR: {x: r3[1].x / scale, y: r3[1].y / scale},
+                BR: {x: r3[2].x / scale, y: r3[2].y / scale}
+            };
+        } finally {
+            proc.delete(); gray.delete(); thresh.delete(); cnts.delete(); hier.delete();
+        }
+    }
+
+    function findUploadManualContour(src) {
+        let procMat = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat();
+        let scaleRatio = 1000.0 / src.cols;
+        let bestPts = null;
+
+        try {
+            cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
+            cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
+
+            let clahe = new cv.CLAHE(3.0, new cv.Size(8, 8));
+            clahe.apply(gray, gray); clahe.delete();
+            cv.GaussianBlur(gray, blur, new cv.Size(7, 7), 0);
+            
+            let imgArea = procMat.cols * procMat.rows;
+
+            let strategies = [
+                () => { 
+                    let edges = new cv.Mat(), closed = new cv.Mat();
+                    try {
+                        cv.Canny(blur, edges, 20, 75);
+                        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
+                        cv.morphologyEx(edges, closed, cv.MORPH_CLOSE, kernel); kernel.delete();
+                        return findBestQuad(closed, scaleRatio, imgArea);
+                    } finally { edges.delete(); closed.delete(); }
+                },
+                () => { 
+                    let adThresh = new cv.Mat();
+                    try {
+                        cv.adaptiveThreshold(blur, adThresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 61, 15);
+                        return findBestQuad(adThresh, scaleRatio, imgArea);
+                    } finally { adThresh.delete(); }
+                }
+            ];
+
+            for (let strategy of strategies) {
+                bestPts = strategy();
+                if (bestPts) break; 
+            }
+        } finally {
+            procMat.delete(); gray.delete(); blur.delete();
+        }
+        return bestPts ? orderPoints(bestPts) : null;
+    }
+
+    function findBestQuad(threshMat, scaleRatio, imgArea) {
         let cnts = new cv.MatVector(), hierarchy = new cv.Mat();
         let bestPts = null, bestScore = 0;
-        let minAreaRatio = isTrackerMode ? 0.008 : 0.05;
 
         try {
             cv.findContours(threshMat, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
@@ -298,52 +419,28 @@
                         for(let j = 0; j < 4; j++) pts.push({ x: approx.data32S[j*2], y: approx.data32S[j*2+1] });
                         
                         let area = cv.contourArea(cv.matFromArray(4, 1, cv.CV_32SC2, [pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y, pts[3].x, pts[3].y]));
-                        if (area > (imgArea * minAreaRatio) && area < (imgArea * 0.98)) {
-                            let score = area;
-                            if (!isTrackerMode) {
-                                let polyCenter = { x: (pts[0].x + pts[2].x)/2, y: (pts[0].y + pts[2].y)/2 };
-                                let distToCenter = Math.hypot(polyCenter.x - cxCenter, polyCenter.y - cyCenter);
-                                score = area - (distToCenter * 5); 
-                            }
-                            if (score > bestScore) {
-                                bestScore = score;
-                                bestPts = pts.map(p => ({ x: p.x / scaleRatio, y: p.y / scaleRatio }));
+                        
+                        if (area > (imgArea * 0.15) && area < (imgArea * 0.98)) { 
+                            let w = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+                            let h = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
+                            let ar = Math.max(w, h) / Math.max(1, Math.min(w, h));
+
+                            if (ar > 1.1 && ar < 1.9) { // Proteksi Aspek Rasio (Cegah lock ke objek non-kertas)
+                                if (area > bestScore) {
+                                    bestScore = area;
+                                    bestPts = pts.map(p => ({ x: p.x / scaleRatio, y: p.y / scaleRatio }));
+                                }
                             }
                         }
                     }
-                } finally {
-                    approx.delete();
-                }
+                } finally { approx.delete(); }
             }
-        } finally {
-            cnts.delete(); hierarchy.delete();
-        }
+        } finally { cnts.delete(); hierarchy.delete(); }
         return bestPts;
     }
 
-    // ALGORITMA TES PLUS (Structural Alignment Filter)
-    function getBestAligned(boxes) {
-        if (boxes.length <= 3) return boxes.slice(0, 3);
-        let candidates = boxes.slice(0, 5); 
-        let bestComb = candidates.slice(0, 3);
-        let minVar = Infinity;
-        
-        for(let i=0; i<candidates.length-2; i++) {
-            for(let j=i+1; j<candidates.length-1; j++) {
-                for(let k=j+1; k<candidates.length; k++) {
-                    let c = [candidates[i], candidates[j], candidates[k]];
-                    let meanX = (c[0].x + c[1].x + c[2].x) / 3;
-                    let varX = Math.pow(c[0].x-meanX,2) + Math.pow(c[1].x-meanX,2) + Math.pow(c[2].x-meanX,2);
-                    if (varX < minVar) { minVar = varX; bestComb = c; }
-                }
-            }
-        }
-        return bestComb;
-    }
-
     // =================================================================================
-    // 4. JALUR KAMERA: FIDUCIAL TRACKER (4 KOTAK ZIPGRADE STYLE)
-    // Sesuai Audit: Menggunakan kotak panduan sudut LJK.
+    // 4. JALUR KAMERA: OVERLAY MEPET LAYAR & ANTI-MELESET
     // =================================================================================
     function extractFiducialsFromGuides(src, guides) {
         let gray = new cv.Mat();
@@ -372,108 +469,27 @@
                             }
                         }
                     }
-                    if (!best) return null; // Batal instan jika 1 sudut meleset
+                    if (!best) return null; 
                     found[key] = best;
-                } finally {
-                    cnts.delete(); hier.delete(); roi.delete();
-                }
+                } finally { cnts.delete(); hier.delete(); roi.delete(); }
             }
             return found;
-        } finally {
-            gray.delete();
-        }
+        } finally { gray.delete(); }
     }
 
     // =================================================================================
-    // 5. JALUR UPLOAD: MULTI-STRATEGY CONTOUR (ARRAY STRATEGY + MEMORY SAFE)
-    // Sesuai Audit: Menjaga akurasi absolut Anda dan merapikan fallback.
+    // 5. KONTROL EVENT & STREAM (RACE CONDITION GUARDED)
     // =================================================================================
-    function findUploadManualContour(src, scanMode) {
-        let procMat = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat();
-        let scaleRatio = 1000.0 / src.cols;
-        let bestPts = null;
-
-        try {
-            cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
-            cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
-
-            let clahe = new cv.CLAHE(3.0, new cv.Size(8, 8));
-            clahe.apply(gray, gray);
-            clahe.delete();
-            
-            cv.GaussianBlur(gray, blur, new cv.Size(7, 7), 0);
-            
-            let imgArea = procMat.cols * procMat.rows;
-            let cxCenter = procMat.cols / 2, cyCenter = procMat.rows / 2;
-
-            // STRATEGY ARRAY PATTERN (Penyederhanaan Fallback Sesuai Rekomendasi)
-            let strategies = [
-                () => { // Strategy 1: Standard Edge (Strict or Loose based on mode)
-                    let edges = new cv.Mat(), closed = new cv.Mat();
-                    try {
-                        cv.Canny(blur, edges, scanMode === 'UPLOAD' ? 30 : 20, scanMode === 'UPLOAD' ? 100 : 75);
-                        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-                        cv.morphologyEx(edges, closed, cv.MORPH_CLOSE, kernel);
-                        kernel.delete();
-                        return findBestQuad(closed, scaleRatio, false, imgArea, cxCenter, cyCenter);
-                    } finally { edges.delete(); closed.delete(); }
-                },
-                () => { // Strategy 2: Loose Canny Fallback
-                    let edges = new cv.Mat(), closed = new cv.Mat();
-                    try {
-                        cv.Canny(blur, edges, 15, 50);
-                        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-                        cv.morphologyEx(edges, closed, cv.MORPH_CLOSE, kernel);
-                        kernel.delete();
-                        return findBestQuad(closed, scaleRatio, false, imgArea, cxCenter, cyCenter);
-                    } finally { edges.delete(); closed.delete(); }
-                },
-                () => { // Strategy 3: Gradient Morph (For heavily shadowed edges)
-                    let grad = new cv.Mat();
-                    try {
-                        let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-                        cv.morphologyEx(gray, grad, cv.MORPH_GRADIENT, kernel);
-                        cv.threshold(grad, grad, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
-                        kernel.delete();
-                        return findBestQuad(grad, scaleRatio, false, imgArea, cxCenter, cyCenter);
-                    } finally { grad.delete(); }
-                },
-                () => { // Strategy 4: Adaptive Threshold Fallback
-                    let adThresh = new cv.Mat();
-                    try {
-                        cv.adaptiveThreshold(blur, adThresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 61, 15);
-                        return findBestQuad(adThresh, scaleRatio, false, imgArea, cxCenter, cyCenter);
-                    } finally { adThresh.delete(); }
-                }
-            ];
-
-            for (let strategy of strategies) {
-                bestPts = strategy();
-                if (bestPts) break; // Berhenti jika berhasil mengunci
-            }
-        } finally {
-            procMat.delete(); gray.delete(); blur.delete();
-        }
-        
-        return bestPts ? orderPoints(bestPts) : null;
-    }
-
-    // =================================================================================
-    // 6. KONTROL HARDWARE & EVENT LISTENER (RACE CONDITION GUARDED)
-    // =================================================================================
-    
     document.getElementById('btn-camera').addEventListener('click', async () => {
         if (!validateKey() || isProcessing) return; 
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { showCustomAlert("Akses kamera tidak diizinkan."); return; }
         resetUI(); video.classList.remove('hidden'); overlayCanvas.classList.remove('hidden');
         
         try {
-            // Audit: Resolusi diturunkan ke 1280x720 untuk menjamin tidak lag di HP Low-End
             const stream = await navigator.mediaDevices.getUserMedia({ 
                 video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } 
             });
             video.srcObject = stream;
-            // Audit: Safari kompatibilitas
             video.setAttribute('playsinline', true);
             video.onloadedmetadata = () => {
                 video.play().then(() => {
@@ -489,8 +505,7 @@
 
     document.getElementById('btn-manual-capture').addEventListener('click', () => {
         if (!video.paused && !video.ended && !isProcessing) {
-            isProcessing = true;
-            logAI("Jepret Manual dipicu...");
+            isProcessing = true; logAI("Jepret Manual dipicu...");
             if (videoScanLoop) cancelAnimationFrame(videoScanLoop);
             executeCapture('MANUAL'); 
         }
@@ -498,8 +513,7 @@
 
     document.getElementById('file-upload').addEventListener('change', (e) => {
         if (!validateKey() || !e.target.files[0] || isProcessing) { e.target.value = ''; return; }
-        isProcessing = true;
-        resetUI(); const reader = new FileReader();
+        isProcessing = true; resetUI(); const reader = new FileReader();
         reader.onload = (ev) => {
             const img = new Image(); img.onload = () => {
                 let scale = Math.min(2000 / Math.max(img.width, img.height), 1.0); 
@@ -516,19 +530,12 @@
         let lastProcessTime = 0; autoCaptureLockCount = 0;
 
         let W = overlayCanvas.width, H = overlayCanvas.height;
-        
-        // PENGATURAN V84: KOTAK DIPERBESAR HINGGA MEPET LAYAR (96%) NAMUN RASIO DIKUNCI KETAT 40:57
-        let guideW = W * 0.96;
+        let guideW = W * 0.96; 
         let guideH = guideW * (57/40);
-        if (guideH > H * 0.96) { 
-            guideH = H * 0.96; 
-            guideW = guideH * (40/57); 
-        }
-        let offX = (W - guideW) / 2;
-        let offY = (H - guideH) / 2;
-        let bS = guideW * 0.15; // Ukuran kotak hijau
+        if (guideH > H * 0.96) { guideH = H * 0.96; guideW = guideH * (40/57); }
+        let offX = (W - guideW) / 2, offY = (H - guideH) / 2;
+        let bS = guideW * 0.15; 
 
-        // 4 Kotak Sudut (Fiducial Guide ZipGrade Style)
         let guides = {
             TL: {x: offX, y: offY, w: bS, h: bS},
             TR: {x: offX + guideW - bS, y: offY, w: bS, h: bS},
@@ -542,38 +549,30 @@
                     videoScanLoop = requestAnimationFrame(loop); return; 
                 }
                 lastProcessTime = timestamp;
-                
                 let mat = null;
                 try {
                     hiddenCanvas.getContext('2d').drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                     mat = cv.imread(hiddenCanvas);
-                    
                     let f = extractFiducialsFromGuides(mat, guides); 
                     
                     let ctx = overlayCanvas.getContext('2d');
                     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-                    
-                    ctx.lineWidth = 3; 
-                    ctx.strokeStyle = f ? "#10b981" : "rgba(255, 255, 255, 0.4)";
-                    for (let k in guides) {
-                        ctx.strokeRect(guides[k].x, guides[k].y, guides[k].w, guides[k].h);
-                    }
+                    ctx.lineWidth = 3; ctx.strokeStyle = f ? "#10b981" : "rgba(255, 255, 255, 0.4)";
+                    for (let k in guides) ctx.strokeRect(guides[k].x, guides[k].y, guides[k].w, guides[k].h);
 
                     if (f) {
                         autoCaptureLockCount++;
                         scanStatus.innerHTML = `<span class='text-emerald-500 font-bold'>MENGUNCI... (${Math.min(100, Math.round((autoCaptureLockCount/AUTO_CAPTURE_THRESHOLD)*100))}%)</span>`;
                         if (autoCaptureLockCount >= AUTO_CAPTURE_THRESHOLD) { 
-                            isProcessing = true;
-                            cancelAnimationFrame(videoScanLoop); 
-                            // Audit Rekomendasi: Meneruskan koordinat yang sudah dikunci (f) agar kroping tidak meleset
-                            executeCapture('AUTO', f); 
+                            isProcessing = true; cancelAnimationFrame(videoScanLoop); 
+                            executeCapture('AUTO', f); // Meneruskan koordinat ke mesin potong!
                             return; 
                         }
                     } else {
                         autoCaptureLockCount = 0;
-                        scanStatus.innerText = "Paskan 4 bulatan hitam sudut LJK ke dalam kotak";
+                        scanStatus.innerText = "Paskan 4 bulatan sudut LJK ke dalam kotak";
                     }
-                } catch (err) { console.error("Tracker Loop Error:", err); }
+                } catch (err) { console.error("Tracker Error:", err); }
                 finally { if (mat) mat.delete(); }
                 videoScanLoop = requestAnimationFrame(loop);
             }
@@ -583,13 +582,11 @@
 
     function executeCapture(scanMode, trackedPts = null) {
         let captureCanvas = document.createElement('canvas');
-        captureCanvas.width = video.videoWidth; 
-        captureCanvas.height = video.videoHeight;
+        captureCanvas.width = video.videoWidth; captureCanvas.height = video.videoHeight;
         captureCanvas.getContext('2d').drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
         
         let finalPts = null;
         if (trackedPts) {
-            // Skala balik koordinat kunci ke resolusi asli video kamera (mencegah meleset saat layar HD/4K)
             let scaleX = video.videoWidth / hiddenCanvas.width;
             let scaleY = video.videoHeight / hiddenCanvas.height;
             finalPts = {
@@ -605,151 +602,85 @@
     }
 
     // =================================================================================
-    // 7. PIPELINE FINAL: DUAL-WARP MURNI DARI KODE AKURAT ANDA (MEMORY SAFE)
+    // 6. PIPELINE FINAL: ABSOLUTE DUAL-WARP & FISHEYE FIX
     // =================================================================================
+    
+    function doDualWarp(src, strictWarpedMat, f) {
+        let sTop = cv.matFromArray(4, 1, cv.CV_32FC2, [f.TL.x, f.TL.y, f.TR.x, f.TR.y, f.MR.x, f.MR.y, f.ML.x, f.ML.y]);
+        let dTop = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, FIDUCIAL_WARP_W,0, FIDUCIAL_WARP_W,TARGET_MID_Y, 0,TARGET_MID_Y]);
+        let M_top = cv.getPerspectiveTransform(sTop, dTop), wTop = new cv.Mat();
+        cv.warpPerspective(src, wTop, M_top, new cv.Size(FIDUCIAL_WARP_W, TARGET_MID_Y));
+        let tRoi = strictWarpedMat.roi(new cv.Rect(0, 0, FIDUCIAL_WARP_W, TARGET_MID_Y));
+        wTop.copyTo(tRoi);
+        tRoi.delete(); wTop.delete(); M_top.delete(); sTop.delete(); dTop.delete();
+
+        let botH = FIDUCIAL_WARP_H - TARGET_MID_Y;
+        let sBot = cv.matFromArray(4, 1, cv.CV_32FC2, [f.ML.x, f.ML.y, f.MR.x, f.MR.y, f.BR.x, f.BR.y, f.BL.x, f.BL.y]);
+        let dBot = cv.matFromArray(4, 1, cv.CV_32FC2, [0,0, FIDUCIAL_WARP_W,0, FIDUCIAL_WARP_W,botH, 0,botH]);
+        let M_bot = cv.getPerspectiveTransform(sBot, dBot), wBot = new cv.Mat();
+        cv.warpPerspective(src, wBot, M_bot, new cv.Size(FIDUCIAL_WARP_W, botH));
+        let bRoi = strictWarpedMat.roi(new cv.Rect(0, TARGET_MID_Y, FIDUCIAL_WARP_W, botH));
+        wBot.copyTo(bRoi);
+        bRoi.delete(); wBot.delete(); M_bot.delete(); sBot.delete(); dBot.delete();
+    }
+
     function processLJKPipeline(canvas, scanMode = 'UPLOAD', trackedPts = null) {
         let src = null, roughWarped = null, strictWarpedMat = null; 
-        let gray = null, thresh = null, claheFiducial = null;
-        let contours = null, hierarchy = null;
 
         try {
             src = cv.imread(canvas);
-            logAI(`Memulai Analisis Global Contour (Mode: ${scanMode})...`);
-            
-            let paperPts = null;
+            strictWarpedMat = new cv.Mat.zeros(FIDUCIAL_WARP_H, FIDUCIAL_WARP_W, cv.CV_8UC4);
+            let fids = null, targetSrc = src;
+
             if (scanMode === 'AUTO' && trackedPts) {
-                logAI("Menggunakan koordinat presisi langsung dari layar kamera...");
-                // Bypass pelacakan kontur manual, gunakan titik yang terbukti akurat dari layar
-                paperPts = [
-                    {x: trackedPts.TL.x, y: trackedPts.TL.y},
-                    {x: trackedPts.TR.x, y: trackedPts.TR.y},
-                    {x: trackedPts.BR.x, y: trackedPts.BR.y},
-                    {x: trackedPts.BL.x, y: trackedPts.BL.y}
-                ];
+                logAI("Menggunakan koordinat kamera (Anti-Meleset)...");
+                let rY = TARGET_MID_Y / FIDUCIAL_WARP_H; // Interpolasi Geometris Absolut
+                fids = {
+                    TL: trackedPts.TL, TR: trackedPts.TR, BL: trackedPts.BL, BR: trackedPts.BR,
+                    ML: { x: trackedPts.TL.x + (trackedPts.BL.x - trackedPts.TL.x) * rY, y: trackedPts.TL.y + (trackedPts.BL.y - trackedPts.TL.y) * rY },
+                    MR: { x: trackedPts.TR.x + (trackedPts.BR.x - trackedPts.TR.x) * rY, y: trackedPts.TR.y + (trackedPts.BR.y - trackedPts.TR.y) * rY }
+                };
             } else {
-                paperPts = findUploadManualContour(src, scanMode); 
-            }
-            
-            if (!paperPts) {
-                logAI("Garis LJK tak terlihat. Memproses Full-Frame (Layar Penuh)...", true);
-                paperPts = [ {x: 0, y: 0}, {x: src.cols, y: 0}, {x: src.cols, y: src.rows}, {x: 0, y: src.rows} ];
-            }
+                logAI("Memindai 6 Kotak Hitam Secara Global...");
+                fids = findFiducialsGlobal(src);
 
-            // WARP 1: ROUGH WARP (Meluruskan kertas)
-            let d1 = Math.hypot(paperPts[0].x - paperPts[1].x, paperPts[0].y - paperPts[1].y);
-            let d2 = Math.hypot(paperPts[1].x - paperPts[2].x, paperPts[1].y - paperPts[2].y);
-            let d3 = Math.hypot(paperPts[2].x - paperPts[3].x, paperPts[2].y - paperPts[3].y);
-            let d4 = Math.hypot(paperPts[3].x - paperPts[0].x, paperPts[3].y - paperPts[0].y);
-            let pW = (d1 + d3) / 2.0, pH = (d2 + d4) / 2.0;
-            
-            let ROUGH_W = 1200; 
-            let ratio = Math.max(pH, pW) / Math.min(pH, pW); 
-            let calculated_H = Math.round(ROUGH_W * ratio);
-            
-            if (calculated_H < 1500) calculated_H = 1500; 
-            if (calculated_H > 2100) calculated_H = 2100; 
-            let ROUGH_H = calculated_H;
-            
-            let dstArray = (pW > pH) ? [ ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H, 0, 0 ] : [ 0, 0, ROUGH_W, 0, ROUGH_W, ROUGH_H, 0, ROUGH_H ];
+                if (!fids) {
+                    logAI("Global Search gagal. Mencoba Kontur Kertas Luar...", true);
+                    let paperPts = findUploadManualContour(src);
+                    
+                    if (paperPts) {
+                        let d1 = Math.hypot(paperPts[0].x - paperPts[1].x, paperPts[0].y - paperPts[1].y);
+                        let d2 = Math.hypot(paperPts[1].x - paperPts[2].x, paperPts[1].y - paperPts[2].y);
+                        let R_W = 1200, R_H = Math.round(R_W * (d2/d1));
+                        if (R_H < 1500) R_H = 1500; if (R_H > 2100) R_H = 2100;
 
-            let srcPtsMat = cv.matFromArray(4, 1, cv.CV_32FC2, [paperPts[0].x, paperPts[0].y, paperPts[1].x, paperPts[1].y, paperPts[2].x, paperPts[2].y, paperPts[3].x, paperPts[3].y]);
-            let dstPtsMat = cv.matFromArray(4, 1, cv.CV_32FC2, dstArray);
+                        let srcMat = cv.matFromArray(4, 1, cv.CV_32FC2, [paperPts[0].x, paperPts[0].y, paperPts[1].x, paperPts[1].y, paperPts[2].x, paperPts[2].y, paperPts[3].x, paperPts[3].y]);
+                        let dstMat = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, R_W, 0, R_W, R_H, 0, R_H]);
+                        let M = cv.getPerspectiveTransform(srcMat, dstMat);
+                        roughWarped = new cv.Mat();
+                        cv.warpPerspective(src, roughWarped, M, new cv.Size(R_W, R_H));
+                        srcMat.delete(); dstMat.delete(); M.delete();
 
-            roughWarped = new cv.Mat();
-            let M = cv.getPerspectiveTransform(srcPtsMat, dstPtsMat);
-            cv.warpPerspective(src, roughWarped, M, new cv.Size(ROUGH_W, ROUGH_H));
-            srcPtsMat.delete(); dstPtsMat.delete(); M.delete();
-
-            // MENCARI 6 FIDUCIAL DI DALAM KERTAS YANG SUDAH LURUS (Super Akurat)
-            logAI("Melacak 6 Fiducial Inner (Algoritma Tes Plus & Anti-Cembung)...");
-            gray = new cv.Mat(); thresh = new cv.Mat();
-            cv.cvtColor(roughWarped, gray, cv.COLOR_RGBA2GRAY, 0);
-
-            claheFiducial = new cv.CLAHE(2.0, new cv.Size(8, 8));
-            claheFiducial.apply(gray, gray);
-
-            cv.GaussianBlur(gray, gray, new cv.Size(3, 3), 0); 
-            cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
-            
-            // Mengatasi Distorsi Kamera Cembung (Fisheye): Margin pencarian fiducial diperlebar ke 18% dari tepi
-            let marginW = Math.floor(ROUGH_W * 0.18); 
-            let marginH = Math.floor(ROUGH_H * 0.03); 
-            
-            let centerMask = thresh.roi(new cv.Rect(marginW, 0, ROUGH_W - (2 * marginW), ROUGH_H));
-            centerMask.setTo(new cv.Scalar(0)); centerMask.delete();
-            
-            let roiTop = thresh.roi(new cv.Rect(0, 0, ROUGH_W, marginH)); roiTop.setTo(new cv.Scalar(0)); roiTop.delete();
-            let roiBot = thresh.roi(new cv.Rect(0, ROUGH_H - marginH, ROUGH_W, marginH)); roiBot.setTo(new cv.Scalar(0)); roiBot.delete();
-
-            let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-            cv.morphologyEx(thresh, thresh, cv.MORPH_OPEN, kernel); 
-            cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel); 
-            kernel.delete();
-
-            contours = new cv.MatVector(); hierarchy = new cv.Mat();
-            cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-            let leftBoxes = [], rightBoxes = [];
-            for (let i = 0; i < contours.size(); ++i) {
-                let cnt = contours.get(i), area = cv.contourArea(cnt);
-                if (area > 80 && area < 6000) {
-                    let rect = cv.boundingRect(cnt);
-                    let aspect = rect.width / rect.height, extent = area / (rect.width * rect.height);
-                    if (aspect >= 0.4 && aspect <= 2.5 && extent >= 0.4) {
-                        let cx = rect.x + rect.width / 2, cy = rect.y + rect.height / 2;
-                        if (cx < marginW) leftBoxes.push({x: cx, y: cy, area: area}); 
-                        else if (cx > ROUGH_W - marginW) rightBoxes.push({x: cx, y: cy, area: area});
+                        fids = findFiducialsGlobal(roughWarped);
+                        if (fids) targetSrc = roughWarped;
                     }
                 }
             }
 
-            leftBoxes.sort((a,b) => b.area - a.area); rightBoxes.sort((a,b) => b.area - a.area);
-            let leftSide = getBestAligned(leftBoxes).sort((a,b) => a.y - b.y);
-            let rightSide = getBestAligned(rightBoxes).sort((a,b) => a.y - b.y);
+            if (!fids) throw new Error("Gagal menemukan 6 kotak hitam. Pastikan kotak tidak tercoret/terpotong, dan pencahayaan terang.");
 
-            logAI(`Fiducial Inner Terekstraksi -> Kiri: ${leftSide.length}, Kanan: ${rightSide.length}`);
-
-            if (leftSide.length < 3 || rightSide.length < 3) {
-                throw new Error(`Fiducial Gagal (Kiri: ${leftSide.length}/3, Kanan: ${rightSide.length}/3). Pastikan kotak hitam tidak tertutup dan kertas terang.`);
-            }
-
-            let TL, ML, BL, TR, MR, BR;
-            let distTopMid = (leftSide[1].y - leftSide[0].y) + (rightSide[1].y - rightSide[0].y);
-            let distMidBot = (leftSide[2].y - leftSide[1].y) + (rightSide[2].y - rightSide[1].y);
-
-            if (distTopMid < distMidBot) { TL = rightSide[2]; ML = rightSide[1]; BL = rightSide[0]; TR = leftSide[2]; MR = leftSide[1]; BR = leftSide[0]; } 
-            else { TL = leftSide[0]; ML = leftSide[1]; BL = leftSide[2]; TR = rightSide[0]; MR = rightSide[1]; BR = rightSide[2]; }
-
-            strictWarpedMat = new cv.Mat.zeros(FIDUCIAL_WARP_H, FIDUCIAL_WARP_W, cv.CV_8UC4);
-            let targetMidY = Math.round(FIDUCIAL_WARP_H * ((Math.hypot(TL.x-ML.x, TL.y-ML.y)/Math.hypot(TL.x-BL.x, TL.y-BL.y) + Math.hypot(TR.x-MR.x, TR.y-MR.y)/Math.hypot(TR.x-BR.x, TR.y-BR.y)) / 2));
-
-            // WARP 2: DUAL-WARP JAHITAN TENGAH
-            let srcPtsTop = cv.matFromArray(4, 1, cv.CV_32FC2, [TL.x, TL.y, TR.x, TR.y, MR.x, MR.y, ML.x, ML.y]);
-            let dstPtsTop = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, FIDUCIAL_WARP_W, 0, FIDUCIAL_WARP_W, targetMidY, 0, targetMidY]);
-            let M_top = cv.getPerspectiveTransform(srcPtsTop, dstPtsTop), topWarped = new cv.Mat();
-            cv.warpPerspective(roughWarped, topWarped, M_top, new cv.Size(FIDUCIAL_WARP_W, targetMidY));
-            let topRoi = strictWarpedMat.roi(new cv.Rect(0, 0, FIDUCIAL_WARP_W, targetMidY)); topWarped.copyTo(topRoi);
-            topRoi.delete(); topWarped.delete(); M_top.delete(); srcPtsTop.delete(); dstPtsTop.delete();
-
-            let botH = FIDUCIAL_WARP_H - targetMidY;
-            let srcPtsBot = cv.matFromArray(4, 1, cv.CV_32FC2, [ML.x, ML.y, MR.x, MR.y, BR.x, BR.y, BL.x, BL.y]);
-            let dstPtsBot = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, FIDUCIAL_WARP_W, 0, FIDUCIAL_WARP_W, botH, 0, botH]);
-            let M_bot = cv.getPerspectiveTransform(srcPtsBot, dstPtsBot), botWarped = new cv.Mat();
-            cv.warpPerspective(roughWarped, botWarped, M_bot, new cv.Size(FIDUCIAL_WARP_W, botH));
-            let botRoi = strictWarpedMat.roi(new cv.Rect(0, targetMidY, FIDUCIAL_WARP_W, botH)); botWarped.copyTo(botRoi);
-            botRoi.delete(); botWarped.delete(); M_bot.delete(); srcPtsBot.delete(); dstPtsBot.delete();
-
-            document.getElementById('result-canvas').width = FIDUCIAL_WARP_W; document.getElementById('result-canvas').height = FIDUCIAL_WARP_H;
+            // Eksekusi Jahitan Fisheye Fix!
+            doDualWarp(targetSrc, strictWarpedMat, fids);
             
+            document.getElementById('result-canvas').width = FIDUCIAL_WARP_W; 
+            document.getElementById('result-canvas').height = FIDUCIAL_WARP_H;
+
             let isSuccess = performExtraction(strictWarpedMat, true);
             if (!isSuccess) {
-                logAI("Mendeteksi LJK Terbalik! Auto-Flip 180 Derajat...");
+                logAI("Identitas kosong. Mencoba memutar posisi LJK...");
                 cv.rotate(strictWarpedMat, strictWarpedMat, cv.ROTATE_180);
-                isSuccess = performExtraction(strictWarpedMat, true); 
-                if (!isSuccess) {
-                    logAI("Gagal membaca Identitas LJK.", true);
-                    showCustomAlert("LJK gagal diproses. Pastikan nama terisi dan foto cukup terang.");
-                }
+                isSuccess = performExtraction(strictWarpedMat, true);
+                if (!isSuccess) throw new Error("Gagal membaca Identitas LJK. Pastikan format sesuai dan bulatan terisi penuh.");
             }
 
         } catch (err) {
@@ -758,13 +689,8 @@
             if(src) src.delete(); 
             if(roughWarped) roughWarped.delete(); 
             if(strictWarpedMat) strictWarpedMat.delete(); 
-            if(gray) gray.delete(); 
-            if(thresh) thresh.delete(); 
-            if(claheFiducial) claheFiducial.delete();
-            if(contours) contours.delete(); 
-            if(hierarchy) hierarchy.delete();
             document.getElementById('loader-overlay').classList.add('hidden');
-            isProcessing = false; // Buka kunci pengaman race-condition
+            isProcessing = false; 
         }
     }
 
@@ -820,7 +746,7 @@
     }
 
     // =================================================================================
-    // 8. SISTEM PENILAIAN & UI (TETAP SAMA / TIDAK DIUBAH)
+    // 7. SISTEM PENILAIAN & UI TABEL
     // =================================================================================
     function evaluateCellGroup(opts, ctx, keyChar = null) {
         let sortedOpts = [...opts].sort((a,b) => b.d - a.d);
