@@ -120,6 +120,7 @@
     </div>
 </div>
 
+<!-- Modal Hasil -->
 <div id="result-modal" class="modal opacity-0 pointer-events-none fixed w-full h-full top-0 left-0 flex items-center justify-center z-[100]">
     <div class="modal-overlay absolute w-full h-full bg-slate-900 opacity-75"></div>
     <div class="modal-container bg-white w-11/12 md:max-w-md mx-auto rounded-xl shadow-2xl z-50 transform scale-95 transition-transform duration-300 overflow-hidden">
@@ -159,6 +160,7 @@
     </div>
 </div>
 
+<!-- Modal Alert -->
 <div id="alert-modal" class="modal opacity-0 pointer-events-none fixed w-full h-full top-0 left-0 flex items-center justify-center z-[110]">
     <div class="modal-overlay absolute w-full h-full bg-slate-900 opacity-75"></div>
     <div class="modal-container bg-white w-11/12 md:max-w-sm mx-auto rounded-xl shadow-2xl z-50 overflow-hidden text-center p-6">
@@ -169,6 +171,7 @@
     </div>
 </div>
 
+<!-- Modal Confirm -->
 <div id="confirm-modal" class="modal opacity-0 pointer-events-none fixed w-full h-full top-0 left-0 flex items-center justify-center z-[110]">
     <div class="modal-overlay absolute w-full h-full bg-slate-900 opacity-75"></div>
     <div class="modal-container bg-white w-11/12 md:max-w-sm mx-auto rounded-xl shadow-2xl z-50 overflow-hidden text-center p-6">
@@ -248,7 +251,7 @@
         resultCanvas.classList.add('hidden'); resultCanvas.style.display = 'none';
         overlayCanvas.getContext('2d').clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
         video.classList.add('hidden'); overlayCanvas.classList.add('hidden'); 
-        document.getElementById('placeholder-text').classList.add('hidden');
+        document.getElementById('placeholder-text').classList.remove('hidden');
         document.getElementById('btn-manual-capture').classList.add('hidden');
         smoothedMarkers = null; autoCaptureLockCount = 0; trackerLostFrames = 0; 
         scanStatus.innerText = "Kamera Nonaktif";
@@ -299,7 +302,6 @@
                         }
                         if (maxCosine >= 0.65) { approx.delete(); continue; } 
                         
-                        // PENINGKATAN TRACKER: Verifikasi Rasio Kertas A4/F4 (menghindari mengunci ubin atau kotak lain)
                         let rect = cv.minAreaRect(approx);
                         let aspect = Math.max(rect.size.width, rect.size.height) / Math.min(rect.size.width, rect.size.height);
                         if (aspect < 1.1 || aspect > 2.0) { approx.delete(); continue; }
@@ -333,7 +335,6 @@
     // 4. PEMISAHAN LOGIKA MUTLAK
     // =================================================================================
 
-    // JALUR 1: TRACKER KAMERA (Ditingkatkan dengan CLAHE Equalization)
     function findLiveTrackerContour(src) {
         let procMat = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat(), thresh = new cv.Mat();
         let scaleRatio = 800.0 / src.cols; 
@@ -370,7 +371,6 @@
         return bestPts ? orderPoints(bestPts) : null;
     }
 
-    // JALUR 2: SENJATA PAMUNGKAS (Upload & Manual) - DISEMPURNAKAN
     function findUploadManualContour(src, scanMode) {
         let procMat = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat();
         let scaleRatio = 1000.0 / src.cols;
@@ -380,12 +380,10 @@
             cv.resize(src, procMat, new cv.Size(Math.round(src.cols * scaleRatio), Math.round(src.rows * scaleRatio)));
             cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
 
-            // [SOLUSI 1] CLAHE untuk foto statis (Menghancurkan bayangan tangan/HP)
             let clahe = new cv.CLAHE(3.0, new cv.Size(8, 8));
             clahe.apply(gray, gray);
             clahe.delete();
             
-            // [SOLUSI 2] Gaussian Blur dinaikkan ke 7x7 agar teks LJK meleleh dan tak dianggap tepi kertas
             cv.GaussianBlur(gray, blur, new cv.Size(7, 7), 0);
             
             let imgArea = procMat.cols * procMat.rows;
@@ -394,16 +392,9 @@
             let edges = new cv.Mat(), closed = new cv.Mat();
             let kernel1 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
             
-            // PENYELESAIAN BENTROKAN LINGKUNGAN (HARDWARE)
-            // Upload = Kamera asli (Tajam) -> Canny ketat.
-            // Manual = Video Stream (Agak buram) -> Canny menengah.
-            if (scanMode === 'UPLOAD') {
-                cv.Canny(blur, edges, 30, 100);
-            } else {
-                cv.Canny(blur, edges, 20, 75);
-            }
+            if (scanMode === 'UPLOAD') cv.Canny(blur, edges, 30, 100);
+            else cv.Canny(blur, edges, 20, 75);
             
-            // [SOLUSI 3] Menggunakan MORPH_CLOSE alih-alih dilate biasa untuk menjahit garis putus di sekeliling kertas
             cv.morphologyEx(edges, closed, cv.MORPH_CLOSE, kernel1);
             bestPts = findBestQuad(closed, scaleRatio, false, imgArea, cxCenter, cyCenter);
 
@@ -437,13 +428,14 @@
     }
 
     // =================================================================================
-    // 5. KONTROL HARDWARE & EVENT LISTENER
+    // 5. KONTROL HARDWARE & EVENT LISTENER (ZIPGRADE CAMERA STYLE)
     // =================================================================================
     
     document.getElementById('btn-camera').addEventListener('click', async () => {
         if (!validateKey()) return; 
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { showCustomAlert("Akses kamera tidak diizinkan."); return; }
         resetUI(); video.classList.remove('hidden'); overlayCanvas.classList.remove('hidden');
+        document.getElementById('placeholder-text').classList.add('hidden'); // Sembunyikan teks
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ 
                 video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } } 
@@ -453,6 +445,7 @@
                 video.play().then(() => {
                     let scale = Math.min(1080 / Math.max(video.videoWidth, video.videoHeight), 1.0);
                     hiddenCanvas.width = video.videoWidth * scale; hiddenCanvas.height = video.videoHeight * scale;
+                    // Samakan ukuran overlay dengan video agar koordinat zipgrade 100% presisi
                     overlayCanvas.width = hiddenCanvas.width; overlayCanvas.height = hiddenCanvas.height;
                     document.getElementById('btn-manual-capture').classList.remove('hidden');
                     startStreamLoop();
@@ -483,12 +476,50 @@
         }; reader.readAsDataURL(e.target.files[0]);
     });
 
+    // PENGATURAN KAMERA ZIPGRADE STYLE
     function startStreamLoop() {
         if (videoScanLoop) cancelAnimationFrame(videoScanLoop);
         let lastProcessTime = 0; trackerLostFrames = 0; autoCaptureLockCount = 0; smoothedMarkers = null;
 
         function loop(timestamp) {
             if (!video.paused && !video.ended) {
+                // 1. GAMBAR UI 4 KOTAK DAN GARIS MENYILANG (ZIPGRADE STYLE)
+                let ctx = overlayCanvas.getContext('2d');
+                let w = overlayCanvas.width;
+                let h = overlayCanvas.height;
+                ctx.clearRect(0, 0, w, h);
+
+                const marginX = w * 0.15;
+                const marginY = h * 0.15;
+                const boxSize = w * 0.12;
+
+                const boxes = [
+                    { x: marginX, y: marginY }, // TL
+                    { x: w - marginX - boxSize, y: marginY }, // TR
+                    { x: marginX, y: h - marginY - boxSize }, // BL
+                    { x: w - marginX - boxSize, y: h - marginY - boxSize } // BR
+                ];
+
+                ctx.strokeStyle = "rgba(16, 185, 129, 0.5)"; // Emerald Green
+                ctx.lineWidth = 4;
+                boxes.forEach(b => ctx.strokeRect(b.x, b.y, boxSize, boxSize));
+
+                // Garis menyilang untuk mencari titik tengah
+                ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath();
+                ctx.moveTo(boxes[0].x + boxSize/2, boxes[0].y + boxSize/2);
+                ctx.lineTo(boxes[3].x + boxSize/2, boxes[3].y + boxSize/2);
+                ctx.moveTo(boxes[1].x + boxSize/2, boxes[1].y + boxSize/2);
+                ctx.lineTo(boxes[2].x + boxSize/2, boxes[2].y + boxSize/2);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                
+                // Titik Tengah
+                ctx.strokeStyle = "rgba(234, 179, 8, 0.8)";
+                ctx.beginPath(); ctx.arc(w/2, h/2, boxSize/3, 0, 2 * Math.PI); ctx.stroke();
+
+                // 2. PEMROSESAN OPENCV
                 if (video.videoWidth === 0 || timestamp - lastProcessTime < 60) { 
                     videoScanLoop = requestAnimationFrame(loop); return; 
                 }
@@ -497,34 +528,46 @@
                 try {
                     hiddenCanvas.getContext('2d').drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                     let mat = cv.imread(hiddenCanvas);
-                    
                     let paperPts = findLiveTrackerContour(mat); 
-                    
-                    let ctx = overlayCanvas.getContext('2d');
-                    ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
 
                     if (paperPts) {
                         trackerLostFrames = 0; 
                         let frame = { tl: paperPts[0], tr: paperPts[1], br: paperPts[2], bl: paperPts[3] };
-                        if (!smoothedMarkers) { smoothedMarkers = frame; autoCaptureLockCount = 0; } 
+                        if (!smoothedMarkers) { smoothedMarkers = frame; } 
                         else {
                             ['tl', 'tr', 'br', 'bl'].forEach(k => { 
                                 smoothedMarkers[k].x = smoothedMarkers[k].x * 0.7 + frame[k].x * 0.3;
                                 smoothedMarkers[k].y = smoothedMarkers[k].y * 0.7 + frame[k].y * 0.3; 
                             });
-                            autoCaptureLockCount++;
                         }
                     } else {
                         trackerLostFrames++;
-                        if (trackerLostFrames > 5) { autoCaptureLockCount = 0; smoothedMarkers = null; scanStatus.innerText = "Mencari Kotak LJK..."; }
+                        if (trackerLostFrames > 5) { autoCaptureLockCount = 0; smoothedMarkers = null; scanStatus.innerText = "Arahkan kotak ke sudut LJK..."; }
                     }
 
+                    // 3. LOGIKA ALIGNMENT (PENCOCOKAN KOTAK)
                     if (smoothedMarkers) {
                         let tl = smoothedMarkers.tl, tr = smoothedMarkers.tr, br = smoothedMarkers.br, bl = smoothedMarkers.bl;
-                        ctx.lineWidth = 4; ctx.strokeStyle = "#10b981"; 
-                        ctx.beginPath(); ctx.moveTo(tl.x, tl.y); ctx.lineTo(tr.x, tr.y); ctx.lineTo(br.x, br.y); ctx.lineTo(bl.x, bl.y); ctx.closePath(); ctx.stroke();
                         
-                        scanStatus.innerHTML = `<span class='text-emerald-500 font-bold'>MENGUNCI... (${Math.min(100, Math.round((autoCaptureLockCount/AUTO_CAPTURE_THRESHOLD)*100))}%)</span>`;
+                        // Cek apakah 4 sudut LJK mendekati 4 kotak panduan (Toleransi)
+                        let alignedCount = 0;
+                        const alignThreshold = boxSize * 1.5; // Jarak Toleransi Tarik Garis
+                        if (Math.hypot(tl.x - (boxes[0].x + boxSize/2), tl.y - (boxes[0].y + boxSize/2)) < alignThreshold) alignedCount++;
+                        if (Math.hypot(tr.x - (boxes[1].x + boxSize/2), tr.y - (boxes[1].y + boxSize/2)) < alignThreshold) alignedCount++;
+                        if (Math.hypot(bl.x - (boxes[2].x + boxSize/2), bl.y - (boxes[2].y + boxSize/2)) < alignThreshold) alignedCount++;
+                        if (Math.hypot(br.x - (boxes[3].x + boxSize/2), br.y - (boxes[3].y + boxSize/2)) < alignThreshold) alignedCount++;
+
+                        if (alignedCount >= 3) {
+                            autoCaptureLockCount++;
+                            ctx.strokeStyle = "#eab308"; // Warn kuning saat sejajar
+                            ctx.lineWidth = 6;
+                            boxes.forEach(b => ctx.strokeRect(b.x, b.y, boxSize, boxSize));
+                            scanStatus.innerHTML = `<span class='text-emerald-500 font-bold'>SEJAJAR! MENGUNCI... (${Math.min(100, Math.round((autoCaptureLockCount/AUTO_CAPTURE_THRESHOLD)*100))}%)</span>`;
+                        } else {
+                            autoCaptureLockCount = Math.max(0, autoCaptureLockCount - 1);
+                            scanStatus.innerHTML = `<span class='text-blue-500 font-bold'>Paskan sudut kertas ke 4 kotak</span>`;
+                        }
+
                         if (autoCaptureLockCount >= AUTO_CAPTURE_THRESHOLD) { 
                             let lockedMarkers = { ...smoothedMarkers };
                             cancelAnimationFrame(videoScanLoop); mat.delete(); executeCapture(false, lockedMarkers); return; 
@@ -559,7 +602,6 @@
         setTimeout(() => processLJKPipeline(captureCanvas, exactPtsOriginal, isManual ? 'MANUAL' : 'AUTO'), 100);
     }
 
-    // ALGORITMA TES PLUS (Structural Alignment Filter)
     function getBestAligned(boxes) {
         if (boxes.length <= 3) return boxes.slice(0, 3);
         let candidates = boxes.slice(0, 5); 
@@ -593,7 +635,6 @@
                 paperPts = exactPts; 
             } else {
                 logAI(`Mengeksekusi Metode Pamungkas untuk Mode ${scanMode}.`);
-                // Passing identitas mode ke deteksi agar Canny menyesuaikan
                 paperPts = findUploadManualContour(src, scanMode); 
             }
             
@@ -631,7 +672,6 @@
             let gray = new cv.Mat(), thresh = new cv.Mat();
             cv.cvtColor(roughWarped, gray, cv.COLOR_RGBA2GRAY, 0);
 
-            // [SOLUSI 4] CLAHE dipasang sesaat sebelum mencari Fiducial untuk melawan area bayangan di ujung kertas
             let claheFiducial = new cv.CLAHE(2.0, new cv.Size(8, 8));
             claheFiducial.apply(gray, gray);
             claheFiducial.delete();
@@ -906,212 +946,6 @@
         const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Rekap LJK");
         XLSX.writeFile(wb, `Rekap_LJK_${new Date().toISOString().slice(0, 10)}.xlsx`);
     });
-/**
- * =========================================================================
- * LOGIKA INTI SCANNER LJK (ZIPGRADE STYLE)
- * - 100% Akurat, Runtut, Tidak Berulang, Anti Tabrakan Logika
- * - Bebas Bug Memory Leak (Cocok untuk semua jenis HP dan Kamera)
- * =========================================================================
- */
-
-// Global State untuk mencegah tabrakan proses
-let isProcessing = false;
-let isAutoScanActive = false;
-let animationFrameId = null;
-
-/**
- * ---------------------------------------------------------
- * 1. JALUR KAMERA: AUTO-SCAN & FIDUCIAL (ZIPGRADE STYLE)
- * ---------------------------------------------------------
- * Fungsi ini menggambar 4 kotak target dan garis lurus menyilang 
- * ke tengah untuk membantu pengguna mengarahkan kamera.
- */
-function jalankanPemindaiFiducial(videoElement, overlayCanvas) {
-    const ctx = overlayCanvas.getContext('2d');
-    
-    // Sesuaikan ukuran canvas dengan resolusi asli video di layar
-    overlayCanvas.width = videoElement.clientWidth;
-    overlayCanvas.height = videoElement.clientHeight;
-
-    function drawLoop() {
-        if (!isAutoScanActive) return;
-
-        const w = overlayCanvas.width;
-        const h = overlayCanvas.height;
-        ctx.clearRect(0, 0, w, h);
-
-        // Pengaturan Ukuran Kotak (Proporsional dengan layar HP)
-        const marginX = w * 0.15; // Jarak dari pinggir X
-        const marginY = h * 0.15; // Jarak dari pinggir Y
-        const boxSize = w * 0.12; // Ukuran kotak hitam
-
-        ctx.strokeStyle = "#10b981"; // Warna hijau panduan
-        ctx.lineWidth = 3;
-
-        // Koordinat 4 Kotak (Top-Left, Top-Right, Bottom-Left, Bottom-Right)
-        const boxes = [
-            { x: marginX, y: marginY },
-            { x: w - marginX - boxSize, y: marginY },
-            { x: marginX, y: h - marginY - boxSize },
-            { x: w - marginX - boxSize, y: h - marginY - boxSize }
-        ];
-
-        // Gambar 4 Kotak Fiducial
-        boxes.forEach(b => ctx.strokeRect(b.x, b.y, boxSize, boxSize));
-
-        // Gambar Garis Lurus Menyilang ke Tengah (Mencari titik tengah)
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.6)"; // Putih transparan
-        ctx.setLineDash([5, 5]); // Garis putus-putus
-        ctx.beginPath();
-        // Garis Kiri Atas ke Kanan Bawah
-        ctx.moveTo(boxes[0].x + boxSize/2, boxes[0].y + boxSize/2);
-        ctx.lineTo(boxes[3].x + boxSize/2, boxes[3].y + boxSize/2);
-        // Garis Kanan Atas ke Kiri Bawah
-        ctx.moveTo(boxes[1].x + boxSize/2, boxes[1].y + boxSize/2);
-        ctx.lineTo(boxes[2].x + boxSize/2, boxes[2].y + boxSize/2);
-        ctx.stroke();
-        ctx.setLineDash([]); // Kembalikan ke garis solid
-
-        // Gambar Target Tengah
-        ctx.strokeStyle = "#eab308"; // Kuning
-        ctx.beginPath();
-        ctx.arc(w/2, h/2, boxSize/3, 0, 2 * Math.PI);
-        ctx.stroke();
-
-        // LOGIKA AUTO-SNAP (Mendeteksi Kestabilan Kamera / Pas di tengah)
-        // Di aplikasi asli, fungsi ini mengecek piksel hitam di koordinat `boxes`.
-        if (!isProcessing && Math.random() > 0.97) { 
-            // Angka 0.97 adalah simulasi. Jika piksel fiducial terdeteksi hitam pekat:
-            isAutoScanActive = false; // Hentikan loop sementara
-            eksekusiTombolKamera(videoElement); // Jepret Otomatis!
-        } else {
-            animationFrameId = requestAnimationFrame(drawLoop);
-        }
-    }
-
-    isAutoScanActive = true;
-    drawLoop();
-}
-
-/**
- * ---------------------------------------------------------
- * 2. JALUR UPLOAD & TOMBOL KAMERA (PENYATUAN LOGIKA)
- * ---------------------------------------------------------
- * Rahasia presisi adalah menyamakan proses Upload dan Jepretan Kamera.
- * Keduanya HARUS digambar ke sebuah "Hidden Canvas" beresolusi tinggi terlebih dahulu,
- * barulah kanvas tersebut dikirim ke fungsi pemrosesan utama (Master Function).
- */
-
-// A. Aksi Tombol Jepret Kamera
-function eksekusiTombolKamera(videoElement) {
-    if (isProcessing) return;
-    
-    // Buat canvas tersembunyi sesuai resolusi ASLI kamera (bukan resolusi layar)
-    const hiddenCanvas = document.createElement('canvas');
-    hiddenCanvas.width = videoElement.videoWidth;
-    hiddenCanvas.height = videoElement.videoHeight;
-    
-    const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
-    ctx.drawImage(videoElement, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-    
-    // Kirim ke Master Function
-    prosesLJKUtama(hiddenCanvas);
-}
-
-// B. Aksi Tombol Upload Gambar
-function eksekusiTombolUpload(fileInput) {
-    const file = fileInput.files[0];
-    if (!file || isProcessing) return;
-
-    const reader = new FileReader();
-    reader.onload = function(event) {
-        const img = new Image();
-        img.onload = function() {
-            // Buat canvas tersembunyi sesuai resolusi ASLI gambar unggahan
-            const hiddenCanvas = document.createElement('canvas');
-            hiddenCanvas.width = img.width;
-            hiddenCanvas.height = img.height;
-            
-            const ctx = hiddenCanvas.getContext('2d', { willReadFrequently: true });
-            ctx.drawImage(img, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-            
-            // Kirim ke Master Function (JALUR YANG SAMA DENGAN KAMERA)
-            prosesLJKUtama(hiddenCanvas);
-        }
-        img.src = event.target.result;
-    }
-    reader.readAsDataURL(file);
-    fileInput.value = ''; // Reset input
-}
-
-
-/**
- * ---------------------------------------------------------
- * 3. MASTER FUNCTION: PEMROSESAN LJK (ANTI MEMORY LEAK)
- * ---------------------------------------------------------
- * Semua metode (Upload & Kamera) bermuara ke sini.
- * Memastikan tidak ada logika yang tumpang tindih.
- */
-async function prosesLJKUtama(sourceCanvas) {
-    if (isProcessing) return;
-    isProcessing = true;
-    
-    // Tampilkan Loader UI (Sesuaikan dengan ID loader di file asli Anda)
-    // document.getElementById('loader').classList.remove('hide');
-
-    // =======================================================
-    // SISTEM GARBAGE COLLECTOR (GC) - WAJIB UNTUK HP!
-    // OpenCV JS tidak menghapus memori secara otomatis. 
-    // Tanpa array `trash` ini, HP akan force-close/nge-bug setelah 3-5x scan.
-    const trash = []; 
-    const gc = (mat) => { trash.push(mat); return mat; };
-    // =======================================================
-
-    try {
-        // 1. Tarik gambar presisi tinggi dari sourceCanvas
-        let src = gc(cv.imread(sourceCanvas));
-        
-        // 2. Pre-processing standar (Agar Upload & Kamera sama-sama terbaca)
-        let gray = gc(new cv.Mat());
-        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-        
-        let blurred = gc(new cv.Mat());
-        // Blur ukuran 5x5 meredam noise pada kamera HP murah
-        cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-        
-        let thresh = gc(new cv.Mat());
-        // Gunakan Adaptive Threshold agar tidak peduli LJK berada di tempat gelap/terang
-        cv.adaptiveThreshold(blurred, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
-
-        // 3. Pencarian Kotak / Kontur LJK (Metode Runtut)
-        let contours = gc(new cv.MatVector());
-        let hierarchy = gc(new cv.Mat());
-        cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-        // -- MASUKKAN LOGIKA PEMOTONGAN KORDINAT ROI & BUBBLE ASLI ANDA DI SINI --
-        // Karena threshold Upload dan Kamera sudah disamakan di atas,
-        // akurasi `cv.countNonZero` di bagian ini akan sama presisinya.
-        
-
-        // Setelah selesai, update UI (Sesuaikan dengan fungsi UI asli Anda)
-        // updateTable(); 
-        // openModal('result-modal');
-
-    } catch (error) {
-        console.error("Bug Pemrosesan Terdeteksi:", error);
-        // showCustomAlert("Gagal memindai. Pastikan 4 kotak LJK terlihat jelas.");
-    } finally {
-        // PEMBUNUHAN OTOMATIS OBJEK MEMORI (Mencegah Crash di HP)
-        trash.forEach(mat => {
-            if (mat && !mat.isDeleted()) {
-                try { mat.delete(); } catch(e) {}
-            }
-        });
-        
-        isProcessing = false;
-        // document.getElementById('loader').classList.add('hide');
-    }
-}
 </script>
 </body>
 </html>
