@@ -201,12 +201,12 @@
     const MATRIX_MAP = {
         name: { c: 0, r: 0, w: 20, h: 26, skipRow: 2 }, 
         kelas: { c: 21, r: 14, w: 2, h: 12, skipRow: 2 }, 
-        absen: { c: 24, r: 16, w: 3, h: 10, skipRow: 2 }, 
+        absen: { c: 24, r: 14, w: 7, h: 11, skipRow: 2 }, 
         answers: { startRow: 29, skipRow: 1, qPerCol: 10, options: 4, blocks: [{startCol:0}, {startCol:5}, {startCol:10}, {startCol:15}, {startCol:20}], optionOffset: 1 }
     };
     
     const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split('');
-    const NUMBERS = "0123456789".split('');
+    const NUMBERS = "0123456789-".split('');
     const KELAS_VALS = ['7','8','9','A','B','C','D','E','F','G','H','T'];
 
     let resultData = [], scanCounter = 1, videoScanLoop = null;
