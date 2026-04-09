@@ -26,7 +26,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v85.0 (Absolute Precision Dual-Warp & Fisheye Fix)</p>
+            <p class="text-sm text-slate-300 mt-1">v86.0 (Strict Fiducial Filter & Two-Step Upload)</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -37,13 +37,12 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v85.0 FINAL</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v86.0 STRICT</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai. Menunggu Instruksi...<br>
-                > Audit: Memory Leak Guard Aktif.<br>
-                > Kamera: Edge-Lock Bypass Tracker (Anti-Meleset).<br>
-                > Upload: Global Fiducial Dot Search Aktif.<br>
+                > Kamera: Strict Solidity Filter Aktif (Anti Teks/Garis).<br>
+                > Upload: WAJIB cari Garis Pembatas dahulu.<br>
                 > Engine: Dual-Warp 1200x1710 (Geometry Fix).<br>
             </div>
             <div>
@@ -61,7 +60,7 @@
                 <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
                     <svg class="w-16 h-16 mx-auto mb-3 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
                     Arahkan kamera ke LJK atau Upload Scan.<br>
-                    <span class="text-xs text-emerald-400">Paskan 4 bulatan sudut LJK ke dalam kotak hijau.</span>
+                    <span class="text-xs text-emerald-400">Paskan 4 bulatan hitam sudut LJK ke dalam kotak hijau.</span>
                 </div>
                 <video id="video" playsinline autoplay muted class="hidden"></video>
                 <canvas id="overlay-canvas" class="hidden pointer-events-none"></canvas>
@@ -74,7 +73,7 @@
                 <div id="loader-overlay" class="absolute inset-0 bg-slate-900/95 hidden flex-col justify-center items-center z-50 backdrop-blur-sm">
                     <div class="loader mb-4"></div>
                     <p id="loader-text" class="text-xs font-bold text-emerald-400 tracking-widest animate-pulse uppercase text-center leading-relaxed">
-                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Menjahit & Mengekstrak Nilai...</span>
+                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Mendeteksi Batas & Mengekstrak Nilai...</span>
                     </p>
                 </div>
             </div>
@@ -268,7 +267,7 @@
     const checkCV = setInterval(() => { if (typeof cv !== 'undefined' && cv.Mat) { clearInterval(checkCV); document.getElementById('cv-status').innerHTML = '<div class="w-3 h-3 rounded-full bg-emerald-500"></div> OpenCV Siap'; } }, 500);
 
     // =================================================================================
-    // 3. CORE COMPUTER VISION (GLOBAL FIDUCIAL SEARCH - ANTI BERANTAKAN)
+    // 3. CORE COMPUTER VISION (GLOBAL FIDUCIAL SEARCH & BOUNDARY)
     // =================================================================================
 
     function orderPoints(pts) {
@@ -282,42 +281,41 @@
         return sorted;
     }
 
-    function findFiducialsGlobal(src) {
-        let proc = new cv.Mat(), gray = new cv.Mat(), thresh = new cv.Mat();
-        let cnts = new cv.MatVector(), hier = new cv.Mat();
-        let scale = 1000.0 / Math.max(src.cols, src.rows);
-        
+    function extract6FiducialsStrict(warped) {
+        let gray = new cv.Mat(), thresh = new cv.Mat();
         try {
-            cv.resize(src, proc, new cv.Size(Math.round(src.cols * scale), Math.round(src.rows * scale)));
-            cv.cvtColor(proc, gray, cv.COLOR_RGBA2GRAY, 0);
+            cv.cvtColor(warped, gray, cv.COLOR_RGBA2GRAY, 0);
 
+            // Perkuat kontras agar kotak hitam sangat menonjol
             let clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
             clahe.apply(gray, gray); clahe.delete();
 
             cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
             cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 51, 15);
 
+            let cnts = new cv.MatVector(), hier = new cv.Mat();
             cv.findContours(thresh, cnts, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
 
-            let blobs = [];
+            let w = warped.cols, h = warped.rows;
+            let lefts = [], rights = [];
+
             for(let i=0; i < cnts.size(); i++) {
                 let c = cnts.get(i), area = cv.contourArea(c);
-                if (area > 20 && area < 4000) { 
-                    let r = cv.boundingRect(c);
-                    let aspect = r.width / r.height;
-                    if (aspect > 0.4 && aspect < 2.5 && (area / (r.width * r.height)) > 0.4) {
-                        let M = cv.moments(c);
-                        blobs.push({ x: (M.m10 / M.m00), y: (M.m01 / M.m00) });
+                if (area > 50 && area < 5000) { 
+                    let rect = cv.boundingRect(c);
+                    let aspect = rect.width / rect.height;
+                    let extent = area / (rect.width * rect.height);
+                    
+                    // FILTER SUPER KETAT: Harus mendekati bujur sangkar (0.7-1.3) dan Padat Blok Solid (>0.75)
+                    if (aspect > 0.7 && aspect < 1.3 && extent > 0.75) {
+                        let cx = rect.x + rect.width / 2;
+                        let cy = rect.y + rect.height / 2;
+                        if (cx < w * 0.25) lefts.push({ x: cx, y: cy });
+                        else if (cx > w * 0.75) rights.push({ x: cx, y: cy });
                     }
                 }
             }
-
-            if (blobs.length < 6) return null;
-
-            blobs.sort((a,b) => a.x - b.x);
-            let midIdx = Math.floor(blobs.length / 2);
-            let lefts = blobs.slice(0, midIdx);
-            let rights = blobs.slice(midIdx);
+            cnts.delete(); hier.delete();
 
             function getBest3(pts) {
                 if (pts.length < 3) return null;
@@ -327,13 +325,13 @@
                     for(let j=i+1; j < pts.length - 1; j++) {
                         for(let k=j+1; k < pts.length; k++) {
                             let spanY = pts[k].y - pts[i].y;
-                            if (spanY < proc.rows * 0.4) continue; // Span minimal 40% tinggi kertas
+                            if (spanY < h * 0.4) continue; // Span minimal 40% tinggi kertas
 
                             let meanX = (pts[i].x + pts[j].x + pts[k].x) / 3;
                             let varX = Math.pow(pts[i].x - meanX, 2) + Math.pow(pts[j].x - meanX, 2) + Math.pow(pts[k].x - meanX, 2);
 
                             let midRatio = (pts[j].y - pts[i].y) / spanY;
-                            let midPenalty = Math.abs(midRatio - 0.52) * 2000; // Penalti jika melenceng dari rasio ideal LJK
+                            let midPenalty = Math.abs(midRatio - 0.52) * 2000; 
 
                             let score = spanY - varX - midPenalty;
                             if (score > maxScore) { maxScore = score; best = [pts[i], pts[j], pts[k]]; }
@@ -346,16 +344,9 @@
             let l3 = getBest3(lefts), r3 = getBest3(rights);
             if (!l3 || !r3) return null;
 
-            return {
-                TL: {x: l3[0].x / scale, y: l3[0].y / scale},
-                ML: {x: l3[1].x / scale, y: l3[1].y / scale},
-                BL: {x: l3[2].x / scale, y: l3[2].y / scale},
-                TR: {x: r3[0].x / scale, y: r3[0].y / scale},
-                MR: {x: r3[1].x / scale, y: r3[1].y / scale},
-                BR: {x: r3[2].x / scale, y: r3[2].y / scale}
-            };
+            return { TL: l3[0], ML: l3[1], BL: l3[2], TR: r3[0], MR: r3[1], BR: r3[2] };
         } finally {
-            proc.delete(); gray.delete(); thresh.delete(); cnts.delete(); hier.delete();
+            gray.delete(); thresh.delete();
         }
     }
 
@@ -408,24 +399,34 @@
         let bestPts = null, bestScore = 0;
 
         try {
-            cv.findContours(threshMat, cnts, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+            // RETR_LIST sangat akurat membaca GARIS PEMBATAS LJK di dalam kertas, tidak peduli background meja
+            cv.findContours(threshMat, cnts, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
             for(let i = 0; i < cnts.size(); i++) {
                 let c = cnts.get(i);
                 let approx = new cv.Mat();
                 try {
-                    cv.approxPolyDP(c, approx, 0.05 * cv.arcLength(c, true), true);
+                    let peri = cv.arcLength(c, true);
+                    // 0.02 * peri membulatkan deteksi menjadi bujur sangkar solid
+                    cv.approxPolyDP(c, approx, 0.02 * peri, true);
                     if (approx.rows === 4 && cv.isContourConvex(approx)) {
                         let pts = [];
                         for(let j = 0; j < 4; j++) pts.push({ x: approx.data32S[j*2], y: approx.data32S[j*2+1] });
                         
-                        let area = cv.contourArea(cv.matFromArray(4, 1, cv.CV_32SC2, [pts[0].x, pts[0].y, pts[1].x, pts[1].y, pts[2].x, pts[2].y, pts[3].x, pts[3].y]));
+                        let area = cv.contourArea(approx);
                         
-                        if (area > (imgArea * 0.15) && area < (imgArea * 0.98)) { 
-                            let w = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-                            let h = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
+                        // Garis batas LJK harus berukuran minimal 25% dari total foto
+                        if (area > (imgArea * 0.25) && area < (imgArea * 0.99)) { 
+                            let w1 = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+                            let w2 = Math.hypot(pts[2].x - pts[3].x, pts[2].y - pts[3].y);
+                            let h1 = Math.hypot(pts[1].x - pts[2].x, pts[1].y - pts[2].y);
+                            let h2 = Math.hypot(pts[3].x - pts[0].x, pts[3].y - pts[0].y);
+                            
+                            let w = (w1 + w2) / 2;
+                            let h = (h1 + h2) / 2;
                             let ar = Math.max(w, h) / Math.max(1, Math.min(w, h));
 
-                            if (ar > 1.1 && ar < 1.9) { // Proteksi Aspek Rasio (Cegah lock ke objek non-kertas)
+                            // Aspek Rasio LJK standar 40:57 (~1.425). Toleransi disetel dari 1.2 hingga 1.7.
+                            if (ar > 1.2 && ar < 1.7) { 
                                 if (area > bestScore) {
                                     bestScore = area;
                                     bestPts = pts.map(p => ({ x: p.x / scaleRatio, y: p.y / scaleRatio }));
@@ -440,7 +441,7 @@
     }
 
     // =================================================================================
-    // 4. JALUR KAMERA: OVERLAY MEPET LAYAR & ANTI-MELESET
+    // 4. JALUR KAMERA: OVERLAY MEPET LAYAR & ANTI-TEKS (EXTENT FILTER)
     // =================================================================================
     function extractFiducialsFromGuides(src, guides) {
         let gray = new cv.Mat();
@@ -462,7 +463,12 @@
                         let c = cnts.get(i), area = cv.contourArea(c);
                         if (area > 30) {
                             let rect = cv.boundingRect(c);
-                            if (area/(rect.width*rect.height) > 0.4 && area > maxArea) {
+                            let aspect = rect.width / rect.height;
+                            let extent = area / (rect.width * rect.height);
+                            
+                            // FILTER SUPER KETAT KAMERA: Hanya bentuk bujur sangkar (0.7-1.3) yang isinya padat warna hitam (>0.75 extent).
+                            // Garis pembatas tebal, angka, atau teks huruf secara otomatis diabaikan karena rasio dan extent-nya kecil.
+                            if (aspect >= 0.7 && aspect <= 1.3 && extent >= 0.75 && area > maxArea) {
                                 maxArea = area;
                                 let M = cv.moments(c);
                                 best = { x: (M.m10/M.m00)+g.x, y: (M.m01/M.m00)+g.y };
@@ -570,7 +576,7 @@
                         }
                     } else {
                         autoCaptureLockCount = 0;
-                        scanStatus.innerText = "Paskan 4 bulatan sudut LJK ke dalam kotak";
+                        scanStatus.innerText = "Paskan 4 bulatan hitam solid sudut LJK ke dalam kotak";
                     }
                 } catch (err) { console.error("Tracker Error:", err); }
                 finally { if (mat) mat.delete(); }
@@ -633,41 +639,42 @@
             let fids = null, targetSrc = src;
 
             if (scanMode === 'AUTO' && trackedPts) {
-                logAI("Menggunakan koordinat kamera (Anti-Meleset)...");
-                let rY = TARGET_MID_Y / FIDUCIAL_WARP_H; // Interpolasi Geometris Absolut
+                logAI("Tahap: Menggunakan koordinat kamera (Anti-Meleset)...");
+                let rY = TARGET_MID_Y / FIDUCIAL_WARP_H; 
                 fids = {
                     TL: trackedPts.TL, TR: trackedPts.TR, BL: trackedPts.BL, BR: trackedPts.BR,
                     ML: { x: trackedPts.TL.x + (trackedPts.BL.x - trackedPts.TL.x) * rY, y: trackedPts.TL.y + (trackedPts.BL.y - trackedPts.TL.y) * rY },
                     MR: { x: trackedPts.TR.x + (trackedPts.BR.x - trackedPts.TR.x) * rY, y: trackedPts.TR.y + (trackedPts.BR.y - trackedPts.TR.y) * rY }
                 };
             } else {
-                logAI("Memindai 6 Kotak Hitam Secara Global...");
-                fids = findFiducialsGlobal(src);
+                logAI("Tahap 1: WAJIB Mencari Garis Pembatas LJK Utama...");
+                let paperPts = findUploadManualContour(src);
+                
+                if (!paperPts) {
+                    throw new Error("Gagal mendeteksi garis batas LJK. Pastikan kertas utuh & difoto lurus menampakkan seluruh garis kotak hitam besar pembatas jawaban.");
+                }
+
+                logAI("Garis pembatas ditemukan. Melakukan Rough Warp...");
+                let d1 = Math.hypot(paperPts[0].x - paperPts[1].x, paperPts[0].y - paperPts[1].y);
+                let d2 = Math.hypot(paperPts[1].x - paperPts[2].x, paperPts[1].y - paperPts[2].y);
+                let R_W = 1200, R_H = Math.round(R_W * (d2/d1));
+                if (R_H < 1500) R_H = 1500; if (R_H > 2100) R_H = 2100;
+
+                let srcMat = cv.matFromArray(4, 1, cv.CV_32FC2, [paperPts[0].x, paperPts[0].y, paperPts[1].x, paperPts[1].y, paperPts[2].x, paperPts[2].y, paperPts[3].x, paperPts[3].y]);
+                let dstMat = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, R_W, 0, R_W, R_H, 0, R_H]);
+                let M = cv.getPerspectiveTransform(srcMat, dstMat);
+                roughWarped = new cv.Mat();
+                cv.warpPerspective(src, roughWarped, M, new cv.Size(R_W, R_H));
+                srcMat.delete(); dstMat.delete(); M.delete();
+
+                logAI("Tahap 2: Mencari 6 Kotak Fiducial di dalam LJK (Presisi Ketat)...");
+                fids = extract6FiducialsStrict(roughWarped);
 
                 if (!fids) {
-                    logAI("Global Search gagal. Mencoba Kontur Kertas Luar...", true);
-                    let paperPts = findUploadManualContour(src);
-                    
-                    if (paperPts) {
-                        let d1 = Math.hypot(paperPts[0].x - paperPts[1].x, paperPts[0].y - paperPts[1].y);
-                        let d2 = Math.hypot(paperPts[1].x - paperPts[2].x, paperPts[1].y - paperPts[2].y);
-                        let R_W = 1200, R_H = Math.round(R_W * (d2/d1));
-                        if (R_H < 1500) R_H = 1500; if (R_H > 2100) R_H = 2100;
-
-                        let srcMat = cv.matFromArray(4, 1, cv.CV_32FC2, [paperPts[0].x, paperPts[0].y, paperPts[1].x, paperPts[1].y, paperPts[2].x, paperPts[2].y, paperPts[3].x, paperPts[3].y]);
-                        let dstMat = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, R_W, 0, R_W, R_H, 0, R_H]);
-                        let M = cv.getPerspectiveTransform(srcMat, dstMat);
-                        roughWarped = new cv.Mat();
-                        cv.warpPerspective(src, roughWarped, M, new cv.Size(R_W, R_H));
-                        srcMat.delete(); dstMat.delete(); M.delete();
-
-                        fids = findFiducialsGlobal(roughWarped);
-                        if (fids) targetSrc = roughWarped;
-                    }
+                    throw new Error("Gagal menemukan 6 kotak fiducial. Pastikan kotak-kotak hitam tersebut tidak tercoret dan benar-benar solid.");
                 }
+                targetSrc = roughWarped;
             }
-
-            if (!fids) throw new Error("Gagal menemukan 6 kotak hitam. Pastikan kotak tidak tercoret/terpotong, dan pencahayaan terang.");
 
             // Eksekusi Jahitan Fisheye Fix!
             doDualWarp(targetSrc, strictWarpedMat, fids);
@@ -680,7 +687,7 @@
                 logAI("Identitas kosong. Mencoba memutar posisi LJK...");
                 cv.rotate(strictWarpedMat, strictWarpedMat, cv.ROTATE_180);
                 isSuccess = performExtraction(strictWarpedMat, true);
-                if (!isSuccess) throw new Error("Gagal membaca Identitas LJK. Pastikan format sesuai dan bulatan terisi penuh.");
+                if (!isSuccess) throw new Error("Gagal membaca Identitas LJK. Pastikan nama/nomor ujian terisi.");
             }
 
         } catch (err) {
