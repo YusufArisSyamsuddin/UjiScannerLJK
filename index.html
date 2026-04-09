@@ -57,7 +57,7 @@
                 <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
                     <svg class="w-16 h-16 mx-auto mb-3 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
                     Arahkan kamera ke LJK atau Upload Scan.<br>
-                    <span class="text-xs text-emerald-400">Sistem 6 Titik Fokus Presisi</span>
+                    <span class="text-xs text-emerald-400">Sistem 4 Sudut Fokus Presisi</span>
                 </div>
                 <video id="video" playsinline autoplay muted class="hidden"></video>
                 <canvas id="overlay-canvas" class="hidden pointer-events-none"></canvas>
@@ -70,7 +70,7 @@
                 <div id="loader-overlay" class="absolute inset-0 bg-slate-900/95 hidden flex-col justify-center items-center z-50 backdrop-blur-sm">
                     <div class="loader mb-4"></div>
                     <p id="loader-text" class="text-xs font-bold text-emerald-400 tracking-widest animate-pulse uppercase text-center leading-relaxed">
-                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Membelah & Memetakan Ulang Sudut...</span>
+                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Mencari Sumbu Tengah & Membelah Otomatis...</span>
                     </p>
                 </div>
             </div>
@@ -204,7 +204,7 @@
 
     let resultData = [], scanCounter = 1, smoothedMarkers = null, videoScanLoop = null;
     let autoCaptureLockCount = 0, trackerLostFrames = 0; 
-    const AUTO_CAPTURE_THRESHOLD = 8; 
+    const AUTO_CAPTURE_THRESHOLD = 15; // Ditingkatkan dari 8 ke 15 agar tidak prematur (lebih stabil)
     let pendingUpdateData = null, pendingUpdateIndex = -1, pendingDeleteId = null;
 
     const video = document.getElementById('video'), overlayCanvas = document.getElementById('overlay-canvas');
@@ -425,7 +425,7 @@
     }
 
     // =================================================================================
-    // 5. KONTROL HARDWARE & EVENT LISTENER (REVISI 6 KOTAK A4/F4)
+    // 5. KONTROL HARDWARE & EVENT LISTENER (KEMBALI KE 4 KOTAK KETAT)
     // =================================================================================
     
     document.getElementById('btn-camera').addEventListener('click', async () => {
@@ -452,7 +452,7 @@
 
     document.getElementById('btn-manual-capture').addEventListener('click', () => {
         if (!video.paused && !video.ended) {
-            logAI("Jepret Manual dipicu. Mengambil sensor mentah (seperti mode Upload)...");
+            logAI("Jepret Manual dipicu. Mengambil sensor mentah...");
             if (videoScanLoop) cancelAnimationFrame(videoScanLoop);
             executeCapture(true, null); 
         }
@@ -478,42 +478,35 @@
 
         function loop(timestamp) {
             if (!video.paused && !video.ended) {
-                // 1. GAMBAR UI 6 KOTAK PANDUAN (ASPEK RASIO A4/F4)
+                // 1. GAMBAR UI 4 KOTAK PANDUAN SAJA (Fokus Sudut Luar LJK)
                 let ctx = overlayCanvas.getContext('2d');
                 let w = overlayCanvas.width;
                 let h = overlayCanvas.height;
                 ctx.clearRect(0, 0, w, h);
 
-                // Menghitung Area Kertas (Berdasarkan rasio fisik nyata kertas LJK)
-                let paperH = h * 0.85; // Area maksimal 85% dari tinggi layar
-                let paperW = paperH / 1.45; // Rasio rata-rata antara A4 (1.41) & F4 (1.53)
-                
-                // Jika lebar area melebihi layar ponsel (misal di layar sempit)
+                let paperH = h * 0.85; 
+                let paperW = paperH / 1.45; 
                 if (paperW > w * 0.9) {
                     paperW = w * 0.9;
                     paperH = paperW * 1.45;
                 }
 
-                // Kalkulasi pusat layar
                 let offsetX = (w - paperW) / 2;
                 let offsetY = (h - paperH) / 2;
-                let boxW = paperW * 0.12; // Ukuran kotak panduan (12% dari lebar kertas)
-                let boxH = boxW; // Memastikan kotak panduan berbentuk kubus simetris
+                let boxW = paperW * 0.12; 
+                let boxH = boxW; 
 
-                // Menyusun 6 Titik Kotak Fiducial
+                // HANYA 4 KOTAK SUDUT (Memudahkan User Experience)
                 const boxes = [
-                    { x: offsetX, y: offsetY }, // TL (Kiri Atas)
-                    { x: offsetX + paperW - boxW, y: offsetY }, // TR (Kanan Atas)
-                    { x: offsetX, y: offsetY + (paperH / 2) - (boxH / 2) }, // ML (Kiri Tengah)
-                    { x: offsetX + paperW - boxW, y: offsetY + (paperH / 2) - (boxH / 2) }, // MR (Kanan Tengah)
-                    { x: offsetX, y: offsetY + paperH - boxH }, // BL (Kiri Bawah)
-                    { x: offsetX + paperW - boxW, y: offsetY + paperH - boxH }  // BR (Kanan Bawah)
+                    { x: offsetX, y: offsetY }, // TL
+                    { x: offsetX + paperW - boxW, y: offsetY }, // TR
+                    { x: offsetX, y: offsetY + paperH - boxH }, // BL
+                    { x: offsetX + paperW - boxW, y: offsetY + paperH - boxH }  // BR
                 ];
 
-                ctx.strokeStyle = "rgba(16, 185, 129, 0.6)"; // Warna dasar kotak: Emerald Green
+                ctx.strokeStyle = "rgba(16, 185, 129, 0.6)";
                 ctx.lineWidth = 4;
                 boxes.forEach(b => ctx.strokeRect(b.x, b.y, boxW, boxH));
-                // Catatan: Garis crosshair/silang tengah sudah dihilangkan
 
                 // 2. PEMROSESAN OPENCV
                 if (video.videoWidth === 0 || timestamp - lastProcessTime < 60) { 
@@ -538,32 +531,33 @@
                         }
                     } else {
                         trackerLostFrames++;
-                        if (trackerLostFrames > 5) { autoCaptureLockCount = 0; smoothedMarkers = null; scanStatus.innerText = "Arahkan LJK ke dalam kotak..."; }
+                        if (trackerLostFrames > 5) { autoCaptureLockCount = 0; smoothedMarkers = null; scanStatus.innerText = "Arahkan LJK ke dalam 4 kotak..."; }
                     }
 
-                    // 3. LOGIKA ALIGNMENT (PENCOCOKAN PINGGIRAN KERTAS KE 6 KOTAK)
+                    // 3. LOGIKA ALIGNMENT YANG JAUH LEBIH KETAT
                     if (smoothedMarkers) {
                         let tl = smoothedMarkers.tl, tr = smoothedMarkers.tr, br = smoothedMarkers.br, bl = smoothedMarkers.bl;
                         
                         let alignedCount = 0;
-                        const alignThreshold = boxW * 1.8; // Toleransi kesesuaian sudut LJK ke UI
+                        // TOLERANSI DIPERKETAT MENJADI 70% DARI UKURAN KOTAK (Sebelumnya 180%)
+                        const alignThreshold = boxW * 0.7; 
 
-                        // Memeriksa kesesuaian ujung batas Tracker ke 4 sudut panduan terluar
-                        // boxes[0]=TL, boxes[1]=TR, boxes[4]=BL, boxes[5]=BR
                         if (Math.hypot(tl.x - (boxes[0].x + boxW/2), tl.y - (boxes[0].y + boxH/2)) < alignThreshold) alignedCount++;
                         if (Math.hypot(tr.x - (boxes[1].x + boxW/2), tr.y - (boxes[1].y + boxH/2)) < alignThreshold) alignedCount++;
-                        if (Math.hypot(bl.x - (boxes[4].x + boxW/2), bl.y - (boxes[4].y + boxH/2)) < alignThreshold) alignedCount++;
-                        if (Math.hypot(br.x - (boxes[5].x + boxW/2), br.y - (boxes[5].y + boxH/2)) < alignThreshold) alignedCount++;
+                        // BL & BR indexnya disesuaikan karena array boxes sekarang hanya isi 4
+                        if (Math.hypot(bl.x - (boxes[2].x + boxW/2), bl.y - (boxes[2].y + boxH/2)) < alignThreshold) alignedCount++;
+                        if (Math.hypot(br.x - (boxes[3].x + boxW/2), br.y - (boxes[3].y + boxH/2)) < alignThreshold) alignedCount++;
 
-                        if (alignedCount >= 3) {
+                        // WAJIB 4 SUDUT PAS (Tidak boleh kurang)
+                        if (alignedCount === 4) {
                             autoCaptureLockCount++;
-                            ctx.strokeStyle = "#eab308"; // Warn kuning terang saat sejajar
+                            ctx.strokeStyle = "#eab308"; 
                             ctx.lineWidth = 6;
                             boxes.forEach(b => ctx.strokeRect(b.x, b.y, boxW, boxH));
                             scanStatus.innerHTML = `<span class='text-emerald-500 font-bold'>SEJAJAR! MENGUNCI... (${Math.min(100, Math.round((autoCaptureLockCount/AUTO_CAPTURE_THRESHOLD)*100))}%)</span>`;
                         } else {
                             autoCaptureLockCount = Math.max(0, autoCaptureLockCount - 1);
-                            scanStatus.innerHTML = `<span class='text-blue-500 font-bold'>Paskan sudut-sudut LJK ke kotak</span>`;
+                            scanStatus.innerHTML = `<span class='text-blue-500 font-bold'>Paskan 4 sudut LJK ke dalam kotak hijau</span>`;
                         }
 
                         if (autoCaptureLockCount >= AUTO_CAPTURE_THRESHOLD) { 
@@ -666,7 +660,7 @@
             cv.warpPerspective(src, roughWarped, M, new cv.Size(ROUGH_W, ROUGH_H));
             srcPtsMat.delete(); dstPtsMat.delete(); M.delete();
 
-            logAI("Mencari Titik Potong 6 Kotak Fiducial...");
+            logAI("Mencari Titik Potong 6 Kotak Fiducial secara Otomatis...");
             let gray = new cv.Mat(), thresh = new cv.Mat();
             cv.cvtColor(roughWarped, gray, cv.COLOR_RGBA2GRAY, 0);
 
