@@ -37,7 +37,7 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v50.9 FINAL</span>
+                <span class="bg-blue-100 text-blue-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v51.0 FINAL</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai. Menunggu Instuksi...<br>
@@ -57,7 +57,7 @@
                 <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
                     <svg class="w-16 h-16 mx-auto mb-3 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
                     Arahkan kamera ke LJK atau Upload Scan.<br>
-                    <span class="text-xs text-emerald-400">Algoritma Full Illumination Correction.</span>
+                    <span class="text-xs text-emerald-400">Sistem 6 Titik Fokus Presisi</span>
                 </div>
                 <video id="video" playsinline autoplay muted class="hidden"></video>
                 <canvas id="overlay-canvas" class="hidden pointer-events-none"></canvas>
@@ -70,7 +70,7 @@
                 <div id="loader-overlay" class="absolute inset-0 bg-slate-900/95 hidden flex-col justify-center items-center z-50 backdrop-blur-sm">
                     <div class="loader mb-4"></div>
                     <p id="loader-text" class="text-xs font-bold text-emerald-400 tracking-widest animate-pulse uppercase text-center leading-relaxed">
-                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Menetralkan Bayangan & Memotong...</span>
+                        Menganalisis LJK<br><span class="text-[9px] text-slate-400">Membelah & Memetakan Ulang Sudut...</span>
                     </p>
                 </div>
             </div>
@@ -120,7 +120,6 @@
     </div>
 </div>
 
-<!-- Modal Hasil -->
 <div id="result-modal" class="modal opacity-0 pointer-events-none fixed w-full h-full top-0 left-0 flex items-center justify-center z-[100]">
     <div class="modal-overlay absolute w-full h-full bg-slate-900 opacity-75"></div>
     <div class="modal-container bg-white w-11/12 md:max-w-md mx-auto rounded-xl shadow-2xl z-50 transform scale-95 transition-transform duration-300 overflow-hidden">
@@ -160,7 +159,6 @@
     </div>
 </div>
 
-<!-- Modal Alert -->
 <div id="alert-modal" class="modal opacity-0 pointer-events-none fixed w-full h-full top-0 left-0 flex items-center justify-center z-[110]">
     <div class="modal-overlay absolute w-full h-full bg-slate-900 opacity-75"></div>
     <div class="modal-container bg-white w-11/12 md:max-w-sm mx-auto rounded-xl shadow-2xl z-50 overflow-hidden text-center p-6">
@@ -171,7 +169,6 @@
     </div>
 </div>
 
-<!-- Modal Confirm -->
 <div id="confirm-modal" class="modal opacity-0 pointer-events-none fixed w-full h-full top-0 left-0 flex items-center justify-center z-[110]">
     <div class="modal-overlay absolute w-full h-full bg-slate-900 opacity-75"></div>
     <div class="modal-container bg-white w-11/12 md:max-w-sm mx-auto rounded-xl shadow-2xl z-50 overflow-hidden text-center p-6">
@@ -428,7 +425,7 @@
     }
 
     // =================================================================================
-    // 5. KONTROL HARDWARE & EVENT LISTENER (ZIPGRADE CAMERA STYLE)
+    // 5. KONTROL HARDWARE & EVENT LISTENER (REVISI 6 KOTAK A4/F4)
     // =================================================================================
     
     document.getElementById('btn-camera').addEventListener('click', async () => {
@@ -445,7 +442,6 @@
                 video.play().then(() => {
                     let scale = Math.min(1080 / Math.max(video.videoWidth, video.videoHeight), 1.0);
                     hiddenCanvas.width = video.videoWidth * scale; hiddenCanvas.height = video.videoHeight * scale;
-                    // Samakan ukuran overlay dengan video agar koordinat zipgrade 100% presisi
                     overlayCanvas.width = hiddenCanvas.width; overlayCanvas.height = hiddenCanvas.height;
                     document.getElementById('btn-manual-capture').classList.remove('hidden');
                     startStreamLoop();
@@ -476,48 +472,48 @@
         }; reader.readAsDataURL(e.target.files[0]);
     });
 
-    // PENGATURAN KAMERA ZIPGRADE STYLE
     function startStreamLoop() {
         if (videoScanLoop) cancelAnimationFrame(videoScanLoop);
         let lastProcessTime = 0; trackerLostFrames = 0; autoCaptureLockCount = 0; smoothedMarkers = null;
 
         function loop(timestamp) {
             if (!video.paused && !video.ended) {
-                // 1. GAMBAR UI 4 KOTAK DAN GARIS MENYILANG (ZIPGRADE STYLE)
+                // 1. GAMBAR UI 6 KOTAK PANDUAN (ASPEK RASIO A4/F4)
                 let ctx = overlayCanvas.getContext('2d');
                 let w = overlayCanvas.width;
                 let h = overlayCanvas.height;
                 ctx.clearRect(0, 0, w, h);
 
-                const marginX = w * 0.15;
-                const marginY = h * 0.15;
-                const boxSize = w * 0.12;
+                // Menghitung Area Kertas (Berdasarkan rasio fisik nyata kertas LJK)
+                let paperH = h * 0.85; // Area maksimal 85% dari tinggi layar
+                let paperW = paperH / 1.45; // Rasio rata-rata antara A4 (1.41) & F4 (1.53)
+                
+                // Jika lebar area melebihi layar ponsel (misal di layar sempit)
+                if (paperW > w * 0.9) {
+                    paperW = w * 0.9;
+                    paperH = paperW * 1.45;
+                }
 
+                // Kalkulasi pusat layar
+                let offsetX = (w - paperW) / 2;
+                let offsetY = (h - paperH) / 2;
+                let boxW = paperW * 0.12; // Ukuran kotak panduan (12% dari lebar kertas)
+                let boxH = boxW; // Memastikan kotak panduan berbentuk kubus simetris
+
+                // Menyusun 6 Titik Kotak Fiducial
                 const boxes = [
-                    { x: marginX, y: marginY }, // TL
-                    { x: w - marginX - boxSize, y: marginY }, // TR
-                    { x: marginX, y: h - marginY - boxSize }, // BL
-                    { x: w - marginX - boxSize, y: h - marginY - boxSize } // BR
+                    { x: offsetX, y: offsetY }, // TL (Kiri Atas)
+                    { x: offsetX + paperW - boxW, y: offsetY }, // TR (Kanan Atas)
+                    { x: offsetX, y: offsetY + (paperH / 2) - (boxH / 2) }, // ML (Kiri Tengah)
+                    { x: offsetX + paperW - boxW, y: offsetY + (paperH / 2) - (boxH / 2) }, // MR (Kanan Tengah)
+                    { x: offsetX, y: offsetY + paperH - boxH }, // BL (Kiri Bawah)
+                    { x: offsetX + paperW - boxW, y: offsetY + paperH - boxH }  // BR (Kanan Bawah)
                 ];
 
-                ctx.strokeStyle = "rgba(16, 185, 129, 0.5)"; // Emerald Green
+                ctx.strokeStyle = "rgba(16, 185, 129, 0.6)"; // Warna dasar kotak: Emerald Green
                 ctx.lineWidth = 4;
-                boxes.forEach(b => ctx.strokeRect(b.x, b.y, boxSize, boxSize));
-
-                // Garis menyilang untuk mencari titik tengah
-                ctx.strokeStyle = "rgba(255, 255, 255, 0.4)";
-                ctx.setLineDash([5, 5]);
-                ctx.beginPath();
-                ctx.moveTo(boxes[0].x + boxSize/2, boxes[0].y + boxSize/2);
-                ctx.lineTo(boxes[3].x + boxSize/2, boxes[3].y + boxSize/2);
-                ctx.moveTo(boxes[1].x + boxSize/2, boxes[1].y + boxSize/2);
-                ctx.lineTo(boxes[2].x + boxSize/2, boxes[2].y + boxSize/2);
-                ctx.stroke();
-                ctx.setLineDash([]);
-                
-                // Titik Tengah
-                ctx.strokeStyle = "rgba(234, 179, 8, 0.8)";
-                ctx.beginPath(); ctx.arc(w/2, h/2, boxSize/3, 0, 2 * Math.PI); ctx.stroke();
+                boxes.forEach(b => ctx.strokeRect(b.x, b.y, boxW, boxH));
+                // Catatan: Garis crosshair/silang tengah sudah dihilangkan
 
                 // 2. PEMROSESAN OPENCV
                 if (video.videoWidth === 0 || timestamp - lastProcessTime < 60) { 
@@ -542,30 +538,32 @@
                         }
                     } else {
                         trackerLostFrames++;
-                        if (trackerLostFrames > 5) { autoCaptureLockCount = 0; smoothedMarkers = null; scanStatus.innerText = "Arahkan kotak ke sudut LJK..."; }
+                        if (trackerLostFrames > 5) { autoCaptureLockCount = 0; smoothedMarkers = null; scanStatus.innerText = "Arahkan LJK ke dalam kotak..."; }
                     }
 
-                    // 3. LOGIKA ALIGNMENT (PENCOCOKAN KOTAK)
+                    // 3. LOGIKA ALIGNMENT (PENCOCOKAN PINGGIRAN KERTAS KE 6 KOTAK)
                     if (smoothedMarkers) {
                         let tl = smoothedMarkers.tl, tr = smoothedMarkers.tr, br = smoothedMarkers.br, bl = smoothedMarkers.bl;
                         
-                        // Cek apakah 4 sudut LJK mendekati 4 kotak panduan (Toleransi)
                         let alignedCount = 0;
-                        const alignThreshold = boxSize * 1.5; // Jarak Toleransi Tarik Garis
-                        if (Math.hypot(tl.x - (boxes[0].x + boxSize/2), tl.y - (boxes[0].y + boxSize/2)) < alignThreshold) alignedCount++;
-                        if (Math.hypot(tr.x - (boxes[1].x + boxSize/2), tr.y - (boxes[1].y + boxSize/2)) < alignThreshold) alignedCount++;
-                        if (Math.hypot(bl.x - (boxes[2].x + boxSize/2), bl.y - (boxes[2].y + boxSize/2)) < alignThreshold) alignedCount++;
-                        if (Math.hypot(br.x - (boxes[3].x + boxSize/2), br.y - (boxes[3].y + boxSize/2)) < alignThreshold) alignedCount++;
+                        const alignThreshold = boxW * 1.8; // Toleransi kesesuaian sudut LJK ke UI
+
+                        // Memeriksa kesesuaian ujung batas Tracker ke 4 sudut panduan terluar
+                        // boxes[0]=TL, boxes[1]=TR, boxes[4]=BL, boxes[5]=BR
+                        if (Math.hypot(tl.x - (boxes[0].x + boxW/2), tl.y - (boxes[0].y + boxH/2)) < alignThreshold) alignedCount++;
+                        if (Math.hypot(tr.x - (boxes[1].x + boxW/2), tr.y - (boxes[1].y + boxH/2)) < alignThreshold) alignedCount++;
+                        if (Math.hypot(bl.x - (boxes[4].x + boxW/2), bl.y - (boxes[4].y + boxH/2)) < alignThreshold) alignedCount++;
+                        if (Math.hypot(br.x - (boxes[5].x + boxW/2), br.y - (boxes[5].y + boxH/2)) < alignThreshold) alignedCount++;
 
                         if (alignedCount >= 3) {
                             autoCaptureLockCount++;
-                            ctx.strokeStyle = "#eab308"; // Warn kuning saat sejajar
+                            ctx.strokeStyle = "#eab308"; // Warn kuning terang saat sejajar
                             ctx.lineWidth = 6;
-                            boxes.forEach(b => ctx.strokeRect(b.x, b.y, boxSize, boxSize));
+                            boxes.forEach(b => ctx.strokeRect(b.x, b.y, boxW, boxH));
                             scanStatus.innerHTML = `<span class='text-emerald-500 font-bold'>SEJAJAR! MENGUNCI... (${Math.min(100, Math.round((autoCaptureLockCount/AUTO_CAPTURE_THRESHOLD)*100))}%)</span>`;
                         } else {
                             autoCaptureLockCount = Math.max(0, autoCaptureLockCount - 1);
-                            scanStatus.innerHTML = `<span class='text-blue-500 font-bold'>Paskan sudut kertas ke 4 kotak</span>`;
+                            scanStatus.innerHTML = `<span class='text-blue-500 font-bold'>Paskan sudut-sudut LJK ke kotak</span>`;
                         }
 
                         if (autoCaptureLockCount >= AUTO_CAPTURE_THRESHOLD) { 
@@ -622,7 +620,7 @@
     }
 
     // =================================================================================
-    // 6. PIPELINE FINAL: PEMOTONGAN & EKSTRAKSI NILAI
+    // 6. PIPELINE FINAL: PEMOTONGAN DUAL-WARP (ATAS & BAWAH)
     // =================================================================================
     function processLJKPipeline(canvas, exactPts = null, scanMode = 'UPLOAD') {
         let src = null, roughWarped = null, strictWarpedMat = null; 
@@ -668,7 +666,7 @@
             cv.warpPerspective(src, roughWarped, M, new cv.Size(ROUGH_W, ROUGH_H));
             srcPtsMat.delete(); dstPtsMat.delete(); M.delete();
 
-            logAI("Melacak 6 Fiducial (Algoritma Tes Plus)...");
+            logAI("Mencari Titik Potong 6 Kotak Fiducial...");
             let gray = new cv.Mat(), thresh = new cv.Mat();
             cv.cvtColor(roughWarped, gray, cv.COLOR_RGBA2GRAY, 0);
 
@@ -729,8 +727,12 @@
             else { TL = leftSide[0]; ML = leftSide[1]; BL = leftSide[2]; TR = rightSide[0]; MR = rightSide[1]; BR = rightSide[2]; }
 
             strictWarpedMat = new cv.Mat.zeros(FIDUCIAL_WARP_H, FIDUCIAL_WARP_W, cv.CV_8UC4);
+            
+            // LOGIKA DUAL-WARP: Membelah gambar tepat pada sumbu Fiducial Tengah-Samping
+            logAI("Membelah LJK (Dual-Warp) Pada Sumbu Tengah...");
             let targetMidY = Math.round(FIDUCIAL_WARP_H * ((Math.hypot(TL.x-ML.x, TL.y-ML.y)/Math.hypot(TL.x-BL.x, TL.y-BL.y) + Math.hypot(TR.x-MR.x, TR.y-MR.y)/Math.hypot(TR.x-BR.x, TR.y-BR.y)) / 2));
 
+            // Potongan Atas (Warp Top)
             let srcPtsTop = cv.matFromArray(4, 1, cv.CV_32FC2, [TL.x, TL.y, TR.x, TR.y, MR.x, MR.y, ML.x, ML.y]);
             let dstPtsTop = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, FIDUCIAL_WARP_W, 0, FIDUCIAL_WARP_W, targetMidY, 0, targetMidY]);
             let M_top = cv.getPerspectiveTransform(srcPtsTop, dstPtsTop), topWarped = new cv.Mat();
@@ -738,6 +740,7 @@
             let topRoi = strictWarpedMat.roi(new cv.Rect(0, 0, FIDUCIAL_WARP_W, targetMidY)); topWarped.copyTo(topRoi);
             topRoi.delete(); topWarped.delete(); M_top.delete(); srcPtsTop.delete(); dstPtsTop.delete();
 
+            // Potongan Bawah (Warp Bottom)
             let botH = FIDUCIAL_WARP_H - targetMidY;
             let srcPtsBot = cv.matFromArray(4, 1, cv.CV_32FC2, [ML.x, ML.y, MR.x, MR.y, BR.x, BR.y, BL.x, BL.y]);
             let dstPtsBot = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, FIDUCIAL_WARP_W, 0, FIDUCIAL_WARP_W, botH, 0, botH]);
@@ -745,6 +748,8 @@
             cv.warpPerspective(roughWarped, botWarped, M_bot, new cv.Size(FIDUCIAL_WARP_W, botH));
             let botRoi = strictWarpedMat.roi(new cv.Rect(0, targetMidY, FIDUCIAL_WARP_W, botH)); botWarped.copyTo(botRoi);
             botRoi.delete(); botWarped.delete(); M_bot.delete(); srcPtsBot.delete(); dstPtsBot.delete();
+            
+            logAI("Bagian Atas & Bawah Berhasil Disatukan!");
 
             document.getElementById('result-canvas').width = FIDUCIAL_WARP_W; document.getElementById('result-canvas').height = FIDUCIAL_WARP_H;
             
