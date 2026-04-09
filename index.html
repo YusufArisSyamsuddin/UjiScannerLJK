@@ -53,9 +53,9 @@
         </div>
 
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 lg:col-span-2 flex flex-col relative">
-            <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 flex justify-between items-center text-slate-800">
-                <span>Tracking & Pratinjau</span>
-                <span id="scan-status" class="text-xs font-bold px-3 py-1 bg-slate-100 text-slate-500 rounded-full border border-slate-200">Menunggu Aksi...</span>
+            <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 flex justify-between items-center text-slate-800 min-h-[3rem]">
+                <span class="whitespace-nowrap">Tracking & Pratinjau</span>
+                <span id="scan-status" class="text-[10px] md:text-xs font-bold px-3 py-1 bg-slate-100 text-slate-500 rounded-full border border-slate-200 max-w-[180px] md:max-w-xs truncate text-center">Menunggu Aksi...</span>
             </h2>
             <div id="video-container" class="relative w-full bg-[#0f172a] rounded-lg overflow-hidden flex-1 min-h-[500px] flex items-center justify-center checkerboard">
                 <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
@@ -108,8 +108,8 @@
                         <th class="p-4 font-bold text-center">Aksi</th>
                         <th class="p-4 font-bold">No</th>
                         <th class="p-4 font-bold text-slate-900">Nama Siswa</th>
-                        <th class="p-4 font-bold">Kls</th>
-                        <th class="p-4 font-bold">Absen</th>
+                        <th class="p-4 font-bold">Kelas</th>
+                        <th class="p-4 font-bold">No. Peserta</th>
                         <th class="p-4 font-bold text-emerald-500">Benar</th>
                         <th class="p-4 font-bold text-red-500">Salah</th>
                         <th class="p-4 font-bold text-slate-500">Kosong</th>
@@ -135,13 +135,22 @@
                     <svg class="fill-current text-slate-500" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 18 18"><path d="M14.53 4.53l-1.06-1.06L9 7.94 4.53 3.47 3.47 4.53 7.94 9l-4.47 4.47 1.06 1.06L9 10.06l4.47 4.47 1.06-1.06L10.06 9z"></path></svg>
                 </div>
             </div>
+            
             <div class="my-6 text-center">
                 <p class="text-xs text-slate-500 mb-1 font-medium">Nama Lengkap</p>
-                <h3 id="modal-name" class="text-lg font-black text-slate-800 mb-4 uppercase tracking-wide">-</h3>
+                <!-- KOTAK EDIT NAMA -->
+                <input type="text" id="modal-name" class="w-full text-center text-lg font-black text-slate-800 mb-4 uppercase tracking-wide border-b-2 border-dashed border-slate-300 hover:border-emerald-400 focus:border-emerald-500 focus:bg-white focus:outline-none bg-slate-50 p-2 rounded transition-colors" value="-">
+                
                 <div class="grid grid-cols-1 gap-3">
-                    <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 shadow-sm flex justify-between items-center">
-                        <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Kelas / Absen</p>
-                        <p id="modal-kelas-absen" class="text-base font-black text-slate-800">-</p>
+                    <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 shadow-sm flex flex-col items-center justify-center">
+                        <p class="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Kelas / No. Peserta</p>
+                        <div class="flex gap-2 justify-center items-center">
+                            <!-- KOTAK EDIT KELAS -->
+                            <input type="text" id="modal-kelas" class="w-16 text-center text-base font-black text-slate-800 border-b-2 border-dashed border-slate-300 hover:border-emerald-400 focus:border-emerald-500 focus:bg-white focus:outline-none bg-transparent p-1 rounded uppercase transition-colors" value="-">
+                            <span class="font-bold text-slate-400">/</span>
+                            <!-- KOTAK EDIT NO PESERTA -->
+                            <input type="text" id="modal-peserta" class="w-32 text-center text-base font-black text-slate-800 border-b-2 border-dashed border-slate-300 hover:border-emerald-400 focus:border-emerald-500 focus:bg-white focus:outline-none bg-transparent p-1 rounded uppercase tracking-wider transition-colors" value="-">
+                        </div>
                     </div>
                     <div class="grid grid-cols-3 gap-2">
                         <div class="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-center shadow-sm">
@@ -559,7 +568,7 @@
                         }
                     } else {
                         autoCaptureLockCount = 0;
-                        scanStatus.innerText = "Paskan 4 bulatan hitam solid sudut LJK ke dalam kotak";
+                        scanStatus.innerText = "Arahkan LJK ke Kotak";
                     }
                 } catch (err) { console.error("Tracker Error:", err); }
                 finally { if (mat) mat.delete(); }
@@ -711,13 +720,13 @@
 
             let name = extractIdentity(gridData, MATRIX_MAP.name, ALPHABET, ctx);
             let kelas = extractIdentity(gridData, MATRIX_MAP.kelas, KELAS_VALS, ctx);
-            let absen = extractIdentity(gridData, MATRIX_MAP.absen, NUMBERS, ctx);
+            let peserta = extractIdentity(gridData, MATRIX_MAP.absen, NUMBERS, ctx);
             const key = document.getElementById('answer-key').value.toUpperCase().replace(/[^A-D]/g, '');
             let scoreData = gradeAnswers(gridData, ctx, key);
 
             if(isNewScan) {
-                let existingIndex = resultData.findIndex(d => d.absen === absen && d.kelas === kelas && absen !== "-");
-                let dataRow = { name, kelas, absen, ...scoreData };
+                let existingIndex = resultData.findIndex(d => d.peserta === peserta && d.kelas === kelas && peserta !== "-");
+                let dataRow = { name, kelas, peserta, ...scoreData };
                 if (existingIndex !== -1) { dataRow.id = resultData[existingIndex].id; showPopupResult(dataRow, true, existingIndex); } 
                 else { dataRow.id = scanCounter++; resultData.push(dataRow); showPopupResult(dataRow, false); updateTable(); }
             } else updateTable();
@@ -806,7 +815,7 @@
                 <td class="p-4">${d.id}</td>
                 <td class="p-4 font-bold text-slate-800 uppercase">${d.name}</td>
                 <td class="p-4">${d.kelas}</td>
-                <td class="p-4">${d.absen}</td>
+                <td class="p-4">${d.peserta}</td>
                 <td class="p-4 text-emerald-600 font-bold">${d.trueCount}</td>
                 <td class="p-4 text-red-600 font-bold">${d.falseCount}</td>
                 <td class="p-4 text-slate-600 font-bold">${d.emptyCount}</td>
@@ -826,30 +835,65 @@
     });
 
     function showPopupResult(data, isDuplicate = false, index = -1) {
-        document.getElementById('modal-name').innerText = data.name;
-        document.getElementById('modal-kelas-absen').innerText = `${data.kelas} / ${data.absen}`;
+        // Masukkan data hasil pindai ke dalam Form Kotak Isian (Text Box) agar bisa di-edit
+        document.getElementById('modal-name').value = data.name;
+        document.getElementById('modal-kelas').value = data.kelas;
+        document.getElementById('modal-peserta').value = data.peserta;
+        
         document.getElementById('modal-benar').innerText = data.trueCount; 
         document.getElementById('modal-salah').innerText = data.falseCount; 
         document.getElementById('modal-kosong').innerText = data.emptyCount; 
-        const actionsDiv = document.getElementById('modal-actions'); const modalTitle = document.getElementById('modal-title');
+        
+        const actionsDiv = document.getElementById('modal-actions'); 
+        const modalTitle = document.getElementById('modal-title');
         actionsDiv.innerHTML = '';
+
+        // Fungsi bantuan untuk mengambil nilai baru jika pengguna mengetik di dalam textbox
+        const getUpdatedData = () => {
+            return {
+                ...data,
+                name: document.getElementById('modal-name').value.toUpperCase().trim(),
+                kelas: document.getElementById('modal-kelas').value.toUpperCase().trim(),
+                peserta: document.getElementById('modal-peserta').value.toUpperCase().trim()
+            };
+        };
+
         if (isDuplicate) {
             pendingUpdateData = data; pendingUpdateIndex = index;
             modalTitle.innerText = "Peringatan: Data Sudah Ada!"; modalTitle.classList.replace('text-emerald-600', 'text-yellow-600');
+            
             let btnCancel = document.createElement('button'); btnCancel.className = "px-5 py-2.5 bg-slate-100 font-bold text-slate-600 rounded-lg hover:bg-slate-200 transition"; btnCancel.innerText = "Batal"; btnCancel.onclick = () => closeModal('result-modal');
+            
             let btnUpdate = document.createElement('button'); btnUpdate.className = "px-5 py-2.5 bg-yellow-500 font-bold text-white rounded-lg hover:bg-yellow-600 transition flex-1"; btnUpdate.innerText = "Update Data";
-            btnUpdate.onclick = () => { if (pendingUpdateIndex !== -1 && pendingUpdateData) { resultData[pendingUpdateIndex] = pendingUpdateData; updateTable(); closeModal('result-modal'); } };
+            btnUpdate.onclick = () => { 
+                if (pendingUpdateIndex !== -1) { 
+                    resultData[pendingUpdateIndex] = getUpdatedData(); // Simpan hasil editan ke tabel
+                    updateTable(); 
+                    closeModal('result-modal'); 
+                } 
+            };
+            
             actionsDiv.appendChild(btnCancel); actionsDiv.appendChild(btnUpdate);
         } else {
             modalTitle.innerText = "Berhasil Dipindai!"; modalTitle.classList.replace('text-yellow-600', 'text-emerald-600');
-            let btnClose = document.createElement('button'); btnClose.className = "px-6 py-3 bg-emerald-600 font-bold text-white rounded-lg hover:bg-emerald-700 w-full text-center transition shadow-md"; btnClose.innerText = "Tutup & Lanjut"; btnClose.onclick = () => closeModal('result-modal');
+            
+            let btnClose = document.createElement('button'); btnClose.className = "px-6 py-3 bg-emerald-600 font-bold text-white rounded-lg hover:bg-emerald-700 w-full text-center transition shadow-md"; btnClose.innerText = "Simpan & Lanjut"; 
+            btnClose.onclick = () => { 
+                let updated = getUpdatedData();
+                let idx = resultData.findIndex(d => d.id === updated.id);
+                if (idx !== -1) resultData[idx] = updated; // Simpan hasil editan ke tabel utama
+                updateTable();
+                closeModal('result-modal'); 
+            };
+            
             actionsDiv.appendChild(btnClose);
-        } openModal('result-modal');
+        } 
+        openModal('result-modal');
     }
 
     document.getElementById('btn-export').addEventListener('click', () => {
         if (!resultData.length) return showCustomAlert("Belum ada data nilai.");
-        const ws = XLSX.utils.json_to_sheet(resultData.map(d => ({ "No": d.id, "Nama": d.name, "Kelas": d.kelas, "Absen": d.absen, "Benar": d.trueCount, "Salah": d.falseCount, "Kosong": d.emptyCount, "Detail Benar": d.correctNumbers.join(', '), "Detail Salah": d.wrongNumbers.join(', '), "Jawaban": d.answers.join('') })));
+        const ws = XLSX.utils.json_to_sheet(resultData.map(d => ({ "No": d.id, "Nama": d.name, "Kelas": d.kelas, "No. Peserta": d.peserta, "Benar": d.trueCount, "Salah": d.falseCount, "Kosong": d.emptyCount, "Detail Benar": d.correctNumbers.join(', '), "Detail Salah": d.wrongNumbers.join(', '), "Jawaban": d.answers.join('') })));
         const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Rekap LJK");
         XLSX.writeFile(wb, `Rekap_LJK_${new Date().toISOString().slice(0, 10)}.xlsx`);
     });
