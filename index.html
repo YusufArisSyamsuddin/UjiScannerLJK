@@ -515,7 +515,7 @@
                 let area = cv.contourArea(cnt);
                 if(area > maxArea && area > (grayMat.cols * grayMat.rows * 0.15)) {
                     let approx = new cv.Mat();
-                    cv.approxPolyDP(cnt, approx, 0.02 * cv.cv.arcLength(cnt, true), true);
+                    cv.approxPolyDP(cnt, approx, 0.02 * cv.arcLength(cnt, true), true);
                     if(approx.rows === 4) {
                         let pts = [];
                         for(let j=0; j<4; j++) pts.push({x: approx.data32S[j*2], y: approx.data32S[j*2+1]});
