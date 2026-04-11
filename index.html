@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Scanner LJK - Enterprise Pro V66</title>
+    <title>Scanner LJK - Enterprise Pro V67</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://docs.opencv.org/4.8.0/opencv.js" type="text/javascript"></script>
     <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
@@ -26,7 +26,7 @@
     <header class="bg-slate-900 text-white rounded-xl p-6 shadow-xl mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b-4 border-emerald-500">
         <div>
             <h1 class="text-2xl font-bold tracking-tight text-emerald-400">LJK Scanner Pro</h1>
-            <p class="text-sm text-slate-300 mt-1">v66.0 (Enterprise Stable - Dual Upload Mode)</p>
+            <p class="text-sm text-slate-300 mt-1">v67.0 (Advanced Dynamic Tracking & Sharpness Lock)</p>
         </div>
         <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-4 py-2 rounded-lg text-sm font-medium border border-slate-700">
             <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV Memuat...
@@ -37,12 +37,12 @@
         <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
             <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
                 <span>Status Sistem</span>
-                <span class="bg-emerald-100 text-emerald-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v66.0 SECURE</span>
+                <span class="bg-emerald-100 text-emerald-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">v67.0 AI-TRACK</span>
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai. Menunggu Instruksi...<br>
-                > Arsitektur: Kamera & Upload 100% Terpisah.<br>
-                > Fitur Baru: Pilihan Input (Kamera Native / Galeri) terintegrasi ke Mode Upload.<br>
+                > Kamera: Dynamic ROI Tracking Aktif.<br>
+                > Kamera: Laplacian Sharpness & EMA Smoothing Aktif.<br>
             </div>
             <div>
                 <label id="lbl-answer-key" class="block text-xs font-bold mb-2 text-slate-700 uppercase">Kunci Jawaban (N)</label>
@@ -117,7 +117,6 @@
     </div>
 </div>
 
-<!-- FOOTER PROFESIONAL BARU -->
 <footer class="mt-8 bg-slate-900 text-slate-400 pt-10 pb-8 border-t-4 border-emerald-500 rounded-t-[2.5rem] shadow-[0_-10px_30px_rgba(0,0,0,0.1)] w-full">
     <div class="max-w-4xl mx-auto px-6 text-center flex flex-col items-center gap-5">
         <div>
@@ -137,11 +136,9 @@
         </div>
         
         <div class="w-16 h-1 bg-slate-700 rounded-full my-2"></div>
-        <p class="text-xs font-medium opacity-60 hover:opacity-100 transition-opacity">&copy; 2026 Hak Cipta Dilindungi. Enterprise Stable Version V66.</p>
+        <p class="text-xs font-medium opacity-60 hover:opacity-100 transition-opacity">&copy; 2026 Hak Cipta Dilindungi. Enterprise Stable Version V67.</p>
     </div>
 </footer>
-
-<!-- ================= MODALS ================= -->
 
 <div id="upload-choice-modal" class="modal opacity-0 pointer-events-none fixed w-full h-full top-0 left-0 flex items-center justify-center z-[110]">
     <div class="modal-overlay absolute w-full h-full bg-slate-900 opacity-75" onclick="closeModal('upload-choice-modal')"></div>
@@ -252,10 +249,20 @@
     const KELAS_VALS = ['7','8','9','A','B','C','D','E','F','G','H','T'];
 
     let resultData = [], scanCounter = 1, videoScanLoop = null;
-    let autoCaptureLockCount = 0; 
     let isProcessing = false; 
     let pendingUpdateData = null, pendingUpdateIndex = -1, pendingDeleteId = null;
-    const AUTO_CAPTURE_THRESHOLD = 5; 
+
+    let camStableFrames = 0;
+    let camLostFrames = 0;
+    let camLastFids = null;
+    let camLastProcessTime = 0;
+
+    const TRACK_INTERVAL_MS = 70;
+    const STABLE_FRAMES_TO_CAPTURE = 6;
+    const MIN_CONFIDENCE = 0.85;
+    const MIN_SHARPNESS = 70;
+    const MAX_MOVE_PX = 6;
+    const TRACK_W = 500.0;
 
     const video = document.getElementById('video'), overlayCanvas = document.getElementById('overlay-canvas');
     const hiddenCanvas = document.getElementById('hidden-canvas'), resultCanvas = document.getElementById('result-canvas');
@@ -296,7 +303,7 @@
         overlayCanvas.getContext('2d').clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
         video.classList.add('hidden'); overlayCanvas.classList.add('hidden'); 
         document.getElementById('placeholder-text').classList.add('hidden');
-        autoCaptureLockCount = 0; 
+        camStableFrames = 0; camLostFrames = 0; camLastFids = null; camLastProcessTime = 0;
         isProcessing = false; 
         scanStatus.innerText = "Kamera Nonaktif";
     }
@@ -376,22 +383,128 @@
         return selected;
     }
 
-    function cam_detectPaperRegion(mat) {
-        let procMat = new cv.Mat(), gray = new cv.Mat(), edges = new cv.Mat();
-        let scaleRatio = 500.0 / Math.max(mat.cols, mat.rows);
+    function cam_computeConfidence(fids) {
+        if(!fids || !fids.TL || !fids.TR || !fids.BL || !fids.BR) return 0;
+        let wTop = shared_dist(fids.TL, fids.TR);
+        let wBot = shared_dist(fids.BL, fids.BR);
+        let hLeft = shared_dist(fids.TL, fids.BL);
+        let hRight = shared_dist(fids.TR, fids.BR);
+        if(wBot === 0 || hRight === 0) return 0;
+        let wRatio = wTop / wBot;
+        let hRatio = hLeft / hRight;
+        let ratioScore = 1 - (Math.abs(1 - wRatio) + Math.abs(1 - hRatio));
+        return Math.max(0, Math.min(1, ratioScore));
+    }
+
+    function cam_computeSharpness(grayMat) {
+        let lap = new cv.Mat(), mean = new cv.Mat(), stddev = new cv.Mat();
+        let variance = 0;
+        try {
+            cv.Laplacian(grayMat, lap, cv.CV_64F);
+            cv.meanStdDev(lap, mean, stddev);
+            variance = Math.pow(stddev.data64F[0], 2);
+        } finally {
+            lap.delete(); mean.delete(); stddev.delete();
+        }
+        return variance;
+    }
+
+    function cam_maxCornerMovement(prev, curr) {
+        if(!prev || !curr) return 0;
+        let maxMove = 0;
+        ['TL', 'TR', 'BL', 'BR', 'ML', 'MR'].forEach(k => {
+            if(prev[k] && curr[k]) {
+                let d = shared_dist(prev[k], curr[k]);
+                if(d > maxMove) maxMove = d;
+            }
+        });
+        return maxMove;
+    }
+
+    function cam_smoothPoint(prev, curr, alpha = 0.7) {
+        return { x: alpha * prev.x + (1 - alpha) * curr.x, y: alpha * prev.y + (1 - alpha) * curr.y };
+    }
+
+    function cam_smoothFids(prevFids, currFids, alpha = 0.7) {
+        if (!prevFids) return currFids;
+        let out = {};
+        for (let k of Object.keys(currFids)) {
+            out[k] = cam_smoothPoint(prevFids[k], currFids[k], alpha);
+        }
+        return out;
+    }
+
+    function cam_findSolidBlackBoxInROI(grayMat, px, py, pad) {
+        let rx = Math.max(0, Math.round(px - pad));
+        let ry = Math.max(0, Math.round(py - pad));
+        let rw = Math.min(grayMat.cols - rx, Math.round(pad * 2));
+        let rh = Math.min(grayMat.rows - ry, Math.round(pad * 2));
+        if (rw < 10 || rh < 10) return null;
+
+        let roi = grayMat.roi(new cv.Rect(rx, ry, rw, rh));
+        let thresh = new cv.Mat(), contours = new cv.MatVector(), hierarchy = new cv.Mat();
+        let best = null, bestScore = -Infinity;
+
+        try {
+            cv.adaptiveThreshold(roi, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 25, 10);
+            let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
+            cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel); kernel.delete();
+            cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+            for (let i = 0; i < contours.size(); i++) {
+                let c = contours.get(i);
+                let rect = cv.boundingRect(c);
+                let area = cv.contourArea(c);
+                let rectArea = rect.width * rect.height;
+                if (rectArea <= 0) continue;
+                let aspect = rect.width / rect.height;
+                let extent = area / rectArea;
+
+                if (area > 20 && area < 2000 && aspect > 0.5 && aspect < 1.5 && extent > 0.4) {
+                    let m = cv.moments(c);
+                    if (m.m00 !== 0) {
+                        let cx = rx + (m.m10 / m.m00);
+                        let cy = ry + (m.m01 / m.m00);
+                        let d = shared_dist({x: cx, y: cy}, {x: px, y: py});
+                        let score = area - (d * 2);
+                        if (score > bestScore) {
+                            bestScore = score;
+                            best = { x: cx, y: cy };
+                        }
+                    }
+                }
+            }
+        } finally {
+            roi.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
+        }
+        return best;
+    }
+
+    function cam_executeFastFiducialTracker(grayMat, lastFids, pad) {
+        let fids = {};
+        let keys = ['TL', 'ML', 'BL', 'TR', 'MR', 'BR'];
+        for(let k of keys) {
+            if(!lastFids[k]) return null;
+            let pt = cam_findSolidBlackBoxInROI(grayMat, lastFids[k].x, lastFids[k].y, pad);
+            if(!pt) return null;
+            fids[k] = pt;
+        }
+        return fids;
+    }
+
+    function cam_detectPaperRegionFallback(grayMat) {
+        let edges = new cv.Mat(), blur = new cv.Mat();
         let bestPts = null;
         try {
-            cv.resize(mat, procMat, new cv.Size(Math.round(mat.cols * scaleRatio), Math.round(mat.rows * scaleRatio)));
-            cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
-            cv.GaussianBlur(gray, gray, new cv.Size(5,5), 0);
-            cv.Canny(gray, edges, 50, 150);
+            cv.GaussianBlur(grayMat, blur, new cv.Size(5,5), 0);
+            cv.Canny(blur, edges, 50, 150);
             let contours = new cv.MatVector(), hierarchy = new cv.Mat();
             cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
             let maxArea = 0;
             for(let i=0; i<contours.size(); i++) {
                 let cnt = contours.get(i);
                 let area = cv.contourArea(cnt);
-                if(area > maxArea && area > (procMat.cols * procMat.rows * 0.15)) {
+                if(area > maxArea && area > (grayMat.cols * grayMat.rows * 0.15)) {
                     let approx = new cv.Mat();
                     cv.approxPolyDP(cnt, approx, 0.02 * cv.arcLength(cnt, true), true);
                     if(approx.rows === 4) {
@@ -403,8 +516,7 @@
                         let ratio = ((w1+w2)/2) / ((h1+h2)/2);
                         if (ratio > 0.5 && ratio < 0.9) {
                             maxArea = area;
-                            bestPts = [];
-                            for(let j=0; j<4; j++) bestPts.push({x: ordered[j].x / scaleRatio, y: ordered[j].y / scaleRatio});
+                            bestPts = ordered;
                         }
                     }
                     approx.delete();
@@ -412,96 +524,9 @@
             }
             contours.delete(); hierarchy.delete();
         } finally {
-            procMat.delete(); gray.delete(); edges.delete();
+            edges.delete(); blur.delete();
         }
         return bestPts;
-    }
-
-    function cam_detectFiducialInROI(src, roiRect) {
-        let rx = Math.max(0, roiRect.x), ry = Math.max(0, roiRect.y);
-        let rw = Math.min(src.cols - rx, roiRect.w), rh = Math.min(src.rows - ry, roiRect.h);
-        if (rw <= 0 || rh <= 0) return null;
-        let roi = src.roi(new cv.Rect(rx, ry, rw, rh));
-        let gray = new cv.Mat(), thresh = new cv.Mat();
-        let contours = new cv.MatVector(), hierarchy = new cv.Mat();
-        let best = null, bestScore = -Infinity;
-        try {
-            cv.cvtColor(roi, gray, cv.COLOR_RGBA2GRAY, 0);
-            cv.GaussianBlur(gray, gray, new cv.Size(3, 3), 0);
-            cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 25, 10);
-            let kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-            cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, kernel); kernel.delete();
-            cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-            for (let i = 0; i < contours.size(); i++) {
-                let c = contours.get(i);
-                try {
-                    let rect = cv.boundingRect(c);
-                    let area = cv.contourArea(c);
-                    let rectArea = rect.width * rect.height;
-                    if (rectArea <= 0) continue;
-                    let aspect = rect.width / rect.height;
-                    let extent = area / rectArea;
-                    if (area < 50 || area > 5000) continue;
-                    if (aspect < 0.6 || aspect > 1.4) continue;
-                    if (extent < 0.5) continue;
-                    let m = cv.moments(c);
-                    if (m.m00 === 0) continue;
-                    let cx = rx + (m.m10 / m.m00);
-                    let cy = ry + (m.m01 / m.m00);
-                    let d = Math.hypot(cx - (rx + rw/2), cy - (ry + rh/2));
-                    let score = area - (d * 5);
-                    if (score > bestScore) {
-                        bestScore = score;
-                        best = { x: cx, y: cy };
-                    }
-                } finally {
-                    c.delete();
-                }
-            }
-        } finally {
-            roi.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
-        }
-        return best;
-    }
-
-    function cam_find6FiducialsWithFallback(flatMat) {
-        let W = flatMat.cols, H = flatMat.rows;
-        let zW = Math.round(W * 0.12); 
-        let zH = Math.round(H * 0.10);
-        let mx = Math.round(W * 0.02); 
-        let my = Math.round(H * 0.02);
-        let midStartY = Math.round(H * 0.45);
-        let midHeight = Math.round(H * 0.40); 
-        let zones = {
-            TL: { x: mx, y: my, w: zW, h: zH },
-            ML: { x: mx, y: midStartY, w: zW, h: midHeight },
-            BL: { x: mx, y: H - my - zH, w: zW, h: zH },
-            TR: { x: W - mx - zW, y: my, w: zW, h: zH },
-            MR: { x: W - mx - zW, y: midStartY, w: zW, h: midHeight },
-            BR: { x: W - mx - zW, y: H - my - zH, w: zW, h: zH }
-        };
-        let fid = {
-            TL: cam_detectFiducialInROI(flatMat, zones.TL),
-            ML: cam_detectFiducialInROI(flatMat, zones.ML),
-            BL: cam_detectFiducialInROI(flatMat, zones.BL),
-            TR: cam_detectFiducialInROI(flatMat, zones.TR),
-            MR: cam_detectFiducialInROI(flatMat, zones.MR),
-            BR: cam_detectFiducialInROI(flatMat, zones.BR)
-        };
-        if (!fid.ML && fid.TL && fid.BL) {
-            let r = (fid.MR && fid.TR && fid.BR) ? (fid.MR.y - fid.TR.y)/(fid.BR.y - fid.TR.y) : 0.649; 
-            fid.ML = { x: fid.TL.x + (fid.BL.x - fid.TL.x)*r, y: fid.TL.y + (fid.BL.y - fid.TL.y)*r };
-        }
-        if (!fid.MR && fid.TR && fid.BR) {
-            let r = (fid.ML && fid.TL && fid.BL) ? (fid.ML.y - fid.TL.y)/(fid.BL.y - fid.TL.y) : 0.649; 
-            fid.MR = { x: fid.TR.x + (fid.BR.x - fid.TR.x)*r, y: fid.TR.y + (fid.BR.y - fid.TR.y)*r };
-        }
-        if (!fid.TL && fid.ML && fid.BL) fid.TL = { x: fid.ML.x + (fid.ML.x - fid.BL.x), y: fid.ML.y - (fid.BL.y - fid.ML.y) };
-        if (!fid.BL && fid.TL && fid.ML) fid.BL = { x: fid.ML.x + (fid.ML.x - fid.TL.x), y: fid.ML.y + (fid.ML.y - fid.TL.y) };
-        if (!fid.TR && fid.MR && fid.BR) fid.TR = { x: fid.MR.x + (fid.MR.x - fid.TR.x), y: fid.MR.y - (fid.BR.y - fid.MR.y) };
-        if (!fid.BR && fid.TR && fid.MR) fid.BR = { x: fid.MR.x + (fid.MR.x - fid.TR.x), y: fid.MR.y + (fid.MR.y - fid.TR.y) };
-        if (!fid.TL || !fid.ML || !fid.BL || !fid.TR || !fid.MR || !fid.BR) return null;
-        return fid;
     }
 
     function cam_performDualWarp(src, fid) {
@@ -584,26 +609,12 @@
         }
     }
 
-    function runCameraPipeline(canvas, paperPts) {
-        let src = null, roughWarped = null, finalWarpedMat = null; 
+    function cam_processFullRes(canvas, fids) {
+        let src = null, finalWarpedMat = null; 
         try {
             src = cv.imread(canvas);
-            logAI("[KAMERA] Tahap 1: Coarse Warp...");
-            let PAD = 80;
-            let ROUGH_W = FIDUCIAL_WARP_W, ROUGH_H = FIDUCIAL_WARP_H;
-            let srcMat = cv.matFromArray(4, 1, cv.CV_32FC2, [paperPts[0].x, paperPts[0].y, paperPts[1].x, paperPts[1].y, paperPts[2].x, paperPts[2].y, paperPts[3].x, paperPts[3].y]);
-            let dstMat = cv.matFromArray(4, 1, cv.CV_32FC2, [PAD, PAD, ROUGH_W + PAD, PAD, ROUGH_W + PAD, ROUGH_H + PAD, PAD, ROUGH_H + PAD]);
-            let M_rough = cv.getPerspectiveTransform(srcMat, dstMat);
-            roughWarped = new cv.Mat();
-            cv.warpPerspective(src, roughWarped, M_rough, new cv.Size(ROUGH_W + 2*PAD, ROUGH_H + 2*PAD));
-            srcMat.delete(); dstMat.delete(); M_rough.delete();
-
-            logAI("[KAMERA] Tahap 2: Mencari 6 Fiducial...");
-            let fid = cam_find6FiducialsWithFallback(roughWarped);
-            if (!fid) throw new Error("Kamera gagal presisi. Silakan arahkan ulang.");
-
-            logAI("[KAMERA] Tahap 3: Dynamic Warp...");
-            finalWarpedMat = cam_performDualWarp(roughWarped, fid);
+            logAI("[KAMERA] Ekstraksi resolusi tinggi dari frame stabil...");
+            finalWarpedMat = cam_performDualWarp(src, fids);
 
             document.getElementById('result-canvas').width = FIDUCIAL_WARP_W; 
             document.getElementById('result-canvas').height = FIDUCIAL_WARP_H;
@@ -614,7 +625,7 @@
 
             let isSuccess = cam_performExtraction(finalWarpedMat);
             if (!isSuccess) {
-                logAI("[KAMERA] Data grid kosong. Memutar 180 derajat otomatis...");
+                logAI("[KAMERA] Data LJK terbalik. Memutar 180 derajat otomatis...");
                 cv.rotate(finalWarpedMat, finalWarpedMat, cv.ROTATE_180);
                 cv.imshow('result-canvas', finalWarpedMat);
                 isSuccess = cam_performExtraction(finalWarpedMat); 
@@ -624,7 +635,6 @@
             logAI(err.message, true); showCustomAlert(err.message); 
         } finally { 
             if(src) src.delete(); 
-            if(roughWarped) roughWarped.delete();
             if(finalWarpedMat) finalWarpedMat.delete(); 
             document.getElementById('loader-overlay').classList.add('hidden');
             isProcessing = false; 
@@ -656,49 +666,94 @@
 
     function startStreamLoop() {
         if (videoScanLoop) cancelAnimationFrame(videoScanLoop);
-        let lastProcessTime = 0; autoCaptureLockCount = 0;
+        camStableFrames = 0; camLostFrames = 0; camLastFids = null; camLastProcessTime = 0;
 
         function loop(timestamp) {
             if (!video.paused && !video.ended && !isProcessing) {
-                if (video.videoWidth === 0 || timestamp - lastProcessTime < 150) { 
+                if (video.videoWidth === 0 || timestamp - camLastProcessTime < TRACK_INTERVAL_MS) { 
                     videoScanLoop = requestAnimationFrame(loop); return; 
                 }
-                lastProcessTime = timestamp;
+                camLastProcessTime = timestamp;
 
-                let src = null;
+                let src = null, smallMat = null, gray = null;
                 try {
                     hiddenCanvas.getContext('2d').drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                     src = cv.imread(hiddenCanvas);
-                    let paperPts = cam_detectPaperRegion(src);
+                    
+                    let scale = TRACK_W / src.cols;
+                    smallMat = new cv.Mat();
+                    cv.resize(src, smallMat, new cv.Size(Math.round(src.cols * scale), Math.round(src.rows * scale)));
+                    gray = new cv.Mat();
+                    cv.cvtColor(smallMat, gray, cv.COLOR_RGBA2GRAY, 0);
+
+                    let sharpness = cam_computeSharpness(gray);
+                    let fids = null;
+
+                    if (camLastFids && camLostFrames < 9) {
+                        fids = cam_executeFastFiducialTracker(gray, camLastFids, 20);
+                    }
+
+                    if (!fids) {
+                        let paperPts = cam_detectPaperRegionFallback(gray);
+                        if (paperPts) {
+                            let estFids = {
+                                TL: paperPts[0], TR: paperPts[1], BR: paperPts[2], BL: paperPts[3],
+                                ML: {x: (paperPts[0].x + paperPts[3].x)/2, y: (paperPts[0].y + paperPts[3].y)/2},
+                                MR: {x: (paperPts[1].x + paperPts[2].x)/2, y: (paperPts[1].y + paperPts[2].y)/2}
+                            };
+                            fids = cam_executeFastFiducialTracker(gray, estFids, 40);
+                        }
+                    }
+
                     let ctx = overlayCanvas.getContext('2d');
                     ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-                    
-                    if (paperPts) {
-                        autoCaptureLockCount++;
-                        scanStatus.innerHTML = `<span class='text-emerald-500 font-bold'>KERTAS TERKUNCI... (${Math.min(100, Math.round((autoCaptureLockCount/AUTO_CAPTURE_THRESHOLD)*100))}%)</span>`;
+
+                    if (fids) {
+                        let conf = cam_computeConfidence(fids);
+                        let move = cam_maxCornerMovement(camLastFids, fids);
+
+                        if (conf >= MIN_CONFIDENCE && sharpness >= MIN_SHARPNESS && move <= MAX_MOVE_PX) {
+                            camStableFrames++;
+                            camLostFrames = 0;
+                        } else {
+                            camStableFrames = Math.max(0, camStableFrames - 1);
+                        }
+
+                        camLastFids = cam_smoothFids(camLastFids, fids, 0.7);
+
+                        let stabPercent = Math.min(100, Math.round((camStableFrames / STABLE_FRAMES_TO_CAPTURE) * 100));
+                        scanStatus.innerHTML = `<span class="text-emerald-500 font-bold">STABIL ${stabPercent}%</span>`;
+
                         ctx.beginPath();
-                        ctx.moveTo(paperPts[0].x, paperPts[0].y); ctx.lineTo(paperPts[1].x, paperPts[1].y);
-                        ctx.lineTo(paperPts[2].x, paperPts[2].y); ctx.lineTo(paperPts[3].x, paperPts[3].y);
+                        ctx.moveTo(camLastFids.TL.x / scale, camLastFids.TL.y / scale);
+                        ctx.lineTo(camLastFids.TR.x / scale, camLastFids.TR.y / scale);
+                        ctx.lineTo(camLastFids.BR.x / scale, camLastFids.BR.y / scale);
+                        ctx.lineTo(camLastFids.BL.x / scale, camLastFids.BL.y / scale);
                         ctx.closePath();
                         ctx.fillStyle = "rgba(16, 185, 129, 0.25)"; ctx.fill(); 
-                        ctx.lineWidth = 4; ctx.strokeStyle = "#10b981"; ctx.stroke();
+                        ctx.lineWidth = 4; ctx.strokeStyle = (camStableFrames >= STABLE_FRAMES_TO_CAPTURE/2) ? "#10b981" : "#f59e0b"; ctx.stroke();
 
-                        if (autoCaptureLockCount >= AUTO_CAPTURE_THRESHOLD) { 
+                        if (camStableFrames >= STABLE_FRAMES_TO_CAPTURE) { 
                             isProcessing = true; cancelAnimationFrame(videoScanLoop); 
-                            let captureCanvas = document.createElement('canvas');
-                            captureCanvas.width = video.videoWidth; captureCanvas.height = video.videoHeight;
-                            captureCanvas.getContext('2d').drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+                            let finalFids = {};
+                            for(let k in camLastFids) finalFids[k] = { x: camLastFids[k].x / scale, y: camLastFids[k].y / scale };
+                            
                             resetUI(); document.getElementById('loader-overlay').classList.remove('hidden');
-                            setTimeout(() => runCameraPipeline(captureCanvas, paperPts), 100);
+                            let captureCanvas = document.createElement('canvas');
+                            captureCanvas.width = hiddenCanvas.width; captureCanvas.height = hiddenCanvas.height;
+                            captureCanvas.getContext('2d').drawImage(hiddenCanvas, 0, 0);
+                            
+                            setTimeout(() => cam_processFullRes(captureCanvas, finalFids), 100);
                             return; 
                         }
                     } else {
-                        autoCaptureLockCount = 0;
-                        scanStatus.innerText = "Arahkan LJK penuh ke dalam layar (Cari Kertas)";
+                        camLostFrames++;
+                        camStableFrames = Math.max(0, camStableFrames - 1);
+                        scanStatus.innerHTML = `<span class="text-blue-500 font-bold">MENCARI SUDUT...</span>`;
                     }
-                } catch (err) { console.error("Tracker Error:", err); }
-                finally { if(src) src.delete(); }
-                videoScanLoop = requestAnimationFrame(loop);
+                } catch (err) { }
+                finally { if(src) src.delete(); if(smallMat) smallMat.delete(); if(gray) gray.delete(); }
+                if(!isProcessing) videoScanLoop = requestAnimationFrame(loop);
             }
         } 
         loop(0);
@@ -1006,7 +1061,6 @@
         }
     }
 
-    // SHARED FILE HANDLER (Untuk Input Kamera & Galeri)
     function handleSharedFileUpload(e) {
         if (!validateKey() || !e.target.files[0] || isProcessing) { e.target.value = ''; return; }
         isProcessing = true; 
