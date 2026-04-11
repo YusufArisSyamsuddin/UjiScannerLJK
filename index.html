@@ -81,7 +81,7 @@
                 </button>
                 <button onclick="openModal('upload-choice-modal')" class="flex-1 bg-slate-800 hover:bg-slate-900 text-white px-4 py-3 rounded-lg font-bold transition shadow-md flex justify-center items-center gap-2 text-sm sm:text-base">
                     <svg class="w-5 h-5 hidden sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-                    Upload Gambar
+                    Foto / Upload
                 </button>
             </div>
         </div>
@@ -540,12 +540,9 @@
 
     function cam_performDualWarp(src, fid) {
         let fullWarped = new cv.Mat(FIDUCIAL_WARP_H, FIDUCIAL_WARP_W, cv.CV_8UC4, new cv.Scalar(255,255,255,255));
-        let ratioL = (fid.ML.y - fid.TL.y) / (fid.BL.y - fid.TL.y);
-        let ratioR = (fid.MR.y - fid.TR.y) / (fid.BR.y - fid.TR.y);
-        let validRatioL = (ratioL > 0.45 && ratioL < 0.85) ? ratioL : 0.649;
-        let validRatioR = (ratioR > 0.45 && ratioR < 0.85) ? ratioR : 0.649;
-        let avgRatio = (validRatioL + validRatioR) / 2;
-        let splitY = Math.round(FIDUCIAL_WARP_H * avgRatio);
+        
+        // PERBAIKAN: Rasio LJK fisik mutlak (Fiducial tengah persis di 37/57)
+        let splitY = 37 * GRID_SIZE;
         let botHeight = FIDUCIAL_WARP_H - splitY;
 
         let srcTop = cv.matFromArray(4, 1, cv.CV_32FC2, [fid.TL.x, fid.TL.y, fid.TR.x, fid.TR.y, fid.MR.x, fid.MR.y, fid.ML.x, fid.ML.y]);
@@ -705,8 +702,8 @@
                         TR: { x: guideX + guideW, y: guideY },
                         BL: { x: guideX, y: guideY + guideH },
                         BR: { x: guideX + guideW, y: guideY + guideH },
-                        ML: { x: guideX, y: guideY + guideH * 0.649 },
-                        MR: { x: guideX + guideW, y: guideY + guideH * 0.649 }
+                        ML: { x: guideX, y: guideY + guideH * (37/57) },
+                        MR: { x: guideX + guideW, y: guideY + guideH * (37/57) }
                     };
 
                     let scale = TRACK_W / src.cols;
@@ -736,8 +733,8 @@
                         if (paperPts) {
                             let estFids = {
                                 TL: paperPts[0], TR: paperPts[1], BR: paperPts[2], BL: paperPts[3],
-                                ML: {x: paperPts[0].x + (paperPts[3].x - paperPts[0].x)*0.649, y: paperPts[0].y + (paperPts[3].y - paperPts[0].y)*0.649},
-                                MR: {x: paperPts[1].x + (paperPts[2].x - paperPts[1].x)*0.649, y: paperPts[1].y + (paperPts[2].y - paperPts[1].y)*0.649}
+                                ML: {x: paperPts[0].x + (paperPts[3].x - paperPts[0].x)*(37/57), y: paperPts[0].y + (paperPts[3].y - paperPts[0].y)*(37/57)},
+                                MR: {x: paperPts[1].x + (paperPts[2].x - paperPts[1].x)*(37/57), y: paperPts[1].y + (paperPts[2].y - paperPts[1].y)*(37/57)}
                             };
                             fids = cam_executeFastFiducialTracker(gray, estFids, 40);
                         }
@@ -859,7 +856,7 @@
                     let area = cv.contourArea(cnt);
                     if (area > maxArea && area > (procMat.cols * procMat.rows * 0.15)) {
                         let approx = new cv.Mat();
-                        cv.approxPolyDP(cnt, approx, 0.02 * cv.arcLength(cnt, true), true);
+                        cv.approxPolyDP(cnt, approx, 0.02 * arcLength(cnt, true), true);
                         if (approx.rows === 4 && cv.isContourConvex(approx)) {
                             maxArea = area;
                             let pts = [];
@@ -966,12 +963,9 @@
 
     function up_performDualWarp(src, fid) {
         let fullWarped = new cv.Mat(FIDUCIAL_WARP_H, FIDUCIAL_WARP_W, cv.CV_8UC4, new cv.Scalar(255,255,255,255));
-        let ratioL = (fid.ML.y - fid.TL.y) / (fid.BL.y - fid.TL.y);
-        let ratioR = (fid.MR.y - fid.TR.y) / (fid.BR.y - fid.TR.y);
-        let validRatioL = (ratioL > 0.45 && ratioL < 0.85) ? ratioL : 0.649;
-        let validRatioR = (ratioR > 0.45 && ratioR < 0.85) ? ratioR : 0.649;
-        let avgRatio = (validRatioL + validRatioR) / 2;
-        let splitY = Math.round(FIDUCIAL_WARP_H * avgRatio);
+        
+        // PERBAIKAN: Rasio LJK fisik mutlak (Fiducial tengah persis di 37/57)
+        let splitY = 37 * GRID_SIZE;
         let botHeight = FIDUCIAL_WARP_H - splitY;
 
         let srcTop = cv.matFromArray(4, 1, cv.CV_32FC2, [fid.TL.x, fid.TL.y, fid.TR.x, fid.TR.y, fid.MR.x, fid.MR.y, fid.ML.x, fid.ML.y]);
