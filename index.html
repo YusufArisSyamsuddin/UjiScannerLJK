@@ -41,7 +41,7 @@
             </h2>
             <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
                 > Sistem Dimulai. Menunggu Instruksi...<br>
-                > Kamera: Dynamic ROI Tracking Aktif.<br>
+                > Kamera: UI ROI Guide & Dynamic Tracking Aktif.<br>
                 > Kamera: Laplacian Sharpness & EMA Smoothing Aktif.<br>
             </div>
             <div>
@@ -259,9 +259,9 @@
 
     const TRACK_INTERVAL_MS = 70;
     const STABLE_FRAMES_TO_CAPTURE = 6;
-    const MIN_CONFIDENCE = 0.85;
-    const MIN_SHARPNESS = 70;
-    const MAX_MOVE_PX = 6;
+    const MIN_CONFIDENCE = 0.80; 
+    const MIN_SHARPNESS = 50; 
+    const MAX_MOVE_PX = 15; 
     const TRACK_W = 500.0;
 
     const video = document.getElementById('video'), overlayCanvas = document.getElementById('overlay-canvas');
@@ -384,16 +384,25 @@
     }
 
     function cam_computeConfidence(fids) {
-        if(!fids || !fids.TL || !fids.TR || !fids.BL || !fids.BR) return 0;
+        if(!fids || !fids.TL || !fids.TR || !fids.BL || !fids.BR || !fids.ML || !fids.MR) return 0;
+        
+        let dLeftTotal = shared_dist(fids.TL, fids.BL);
+        let dLeftTop = shared_dist(fids.TL, fids.ML);
+        let dRightTotal = shared_dist(fids.TR, fids.BR);
+        let dRightTop = shared_dist(fids.TR, fids.MR);
+
+        if(dLeftTotal === 0 || dRightTotal === 0) return 0;
+
+        let ratioL = dLeftTop / dLeftTotal;
+        let ratioR = dRightTop / dRightTotal;
+        let ratioDiff = Math.abs(ratioL - ratioR);
+
         let wTop = shared_dist(fids.TL, fids.TR);
         let wBot = shared_dist(fids.BL, fids.BR);
-        let hLeft = shared_dist(fids.TL, fids.BL);
-        let hRight = shared_dist(fids.TR, fids.BR);
-        if(wBot === 0 || hRight === 0) return 0;
-        let wRatio = wTop / wBot;
-        let hRatio = hLeft / hRight;
-        let ratioScore = 1 - (Math.abs(1 - wRatio) + Math.abs(1 - hRatio));
-        return Math.max(0, Math.min(1, ratioScore));
+        let wRatio = Math.min(wTop, wBot) / Math.max(wTop, wBot); 
+
+        let confidence = (1 - ratioDiff) * 0.7 + (wRatio) * 0.3;
+        return Math.max(0, Math.min(1, confidence));
     }
 
     function cam_computeSharpness(grayMat) {
@@ -677,9 +686,29 @@
 
                 let src = null, smallMat = null, gray = null;
                 try {
-                    hiddenCanvas.getContext('2d').drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
+                    let cw = hiddenCanvas.width;
+                    let ch = hiddenCanvas.height;
+                    hiddenCanvas.getContext('2d').drawImage(video, 0, 0, cw, ch);
                     src = cv.imread(hiddenCanvas);
                     
+                    let guideW = cw * 0.75;
+                    let guideH = guideW * (57/40);
+                    if (guideH > ch * 0.85) {
+                        guideH = ch * 0.85;
+                        guideW = guideH / (57/40);
+                    }
+                    let guideX = (cw - guideW) / 2;
+                    let guideY = (ch - guideH) / 2;
+
+                    let uiGuidePts = {
+                        TL: { x: guideX, y: guideY },
+                        TR: { x: guideX + guideW, y: guideY },
+                        BL: { x: guideX, y: guideY + guideH },
+                        BR: { x: guideX + guideW, y: guideY + guideH },
+                        ML: { x: guideX, y: guideY + guideH * 0.649 },
+                        MR: { x: guideX + guideW, y: guideY + guideH * 0.649 }
+                    };
+
                     let scale = TRACK_W / src.cols;
                     smallMat = new cv.Mat();
                     cv.resize(src, smallMat, new cv.Size(Math.round(src.cols * scale), Math.round(src.rows * scale)));
@@ -689,24 +718,51 @@
                     let sharpness = cam_computeSharpness(gray);
                     let fids = null;
 
+                    let initialFids = {};
+                    for (let k in uiGuidePts) {
+                        initialFids[k] = { x: uiGuidePts[k].x * scale, y: uiGuidePts[k].y * scale };
+                    }
+
                     if (camLastFids && camLostFrames < 9) {
-                        fids = cam_executeFastFiducialTracker(gray, camLastFids, 20);
+                        fids = cam_executeFastFiducialTracker(gray, camLastFids, 30);
                     }
 
                     if (!fids) {
+                        fids = cam_executeFastFiducialTracker(gray, initialFids, 45); 
+                    }
+
+                    if (!fids && camLostFrames > 5) {
                         let paperPts = cam_detectPaperRegionFallback(gray);
                         if (paperPts) {
                             let estFids = {
                                 TL: paperPts[0], TR: paperPts[1], BR: paperPts[2], BL: paperPts[3],
-                                ML: {x: (paperPts[0].x + paperPts[3].x)/2, y: (paperPts[0].y + paperPts[3].y)/2},
-                                MR: {x: (paperPts[1].x + paperPts[2].x)/2, y: (paperPts[1].y + paperPts[2].y)/2}
+                                ML: {x: paperPts[0].x + (paperPts[3].x - paperPts[0].x)*0.649, y: paperPts[0].y + (paperPts[3].y - paperPts[0].y)*0.649},
+                                MR: {x: paperPts[1].x + (paperPts[2].x - paperPts[1].x)*0.649, y: paperPts[1].y + (paperPts[2].y - paperPts[1].y)*0.649}
                             };
                             fids = cam_executeFastFiducialTracker(gray, estFids, 40);
                         }
                     }
 
                     let ctx = overlayCanvas.getContext('2d');
-                    ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+                    ctx.clearRect(0, 0, cw, ch);
+
+                    let boxSize = Math.max(40, cw * 0.08);
+                    ctx.lineWidth = 3;
+                    ctx.setLineDash([10, 5]);
+                    
+                    if (fids && camStableFrames > 0) {
+                        ctx.strokeStyle = "rgba(16, 185, 129, 0.2)"; 
+                    } else if (!fids && camLostFrames > 0) {
+                        ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"; 
+                    } else {
+                        ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+                    }
+
+                    ctx.strokeRect(uiGuidePts.TL.x - boxSize/2, uiGuidePts.TL.y - boxSize/2, boxSize, boxSize);
+                    ctx.strokeRect(uiGuidePts.TR.x - boxSize/2, uiGuidePts.TR.y - boxSize/2, boxSize, boxSize);
+                    ctx.strokeRect(uiGuidePts.BL.x - boxSize/2, uiGuidePts.BL.y - boxSize/2, boxSize, boxSize);
+                    ctx.strokeRect(uiGuidePts.BR.x - boxSize/2, uiGuidePts.BR.y - boxSize/2, boxSize, boxSize);
+                    ctx.setLineDash([]);
 
                     if (fids) {
                         let conf = cam_computeConfidence(fids);
@@ -749,9 +805,9 @@
                     } else {
                         camLostFrames++;
                         camStableFrames = Math.max(0, camStableFrames - 1);
-                        scanStatus.innerHTML = `<span class="text-blue-500 font-bold">MENCARI SUDUT...</span>`;
+                        scanStatus.innerHTML = `<span class="text-blue-500 font-bold">MENCARI KOTAK SUDUT...</span>`;
                     }
-                } catch (err) { }
+                } catch (err) { console.error(err); }
                 finally { if(src) src.delete(); if(smallMat) smallMat.delete(); if(gray) gray.delete(); }
                 if(!isProcessing) videoScanLoop = requestAnimationFrame(loop);
             }
