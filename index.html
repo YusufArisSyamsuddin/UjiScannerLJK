@@ -1189,7 +1189,7 @@
         btnDownload.title = "Download Gambar LJK Hasil Scan";
         btnDownload.onclick = () => {
             const link = document.createElement('a');
-            link.download = `LJK_Scan_${data.peserta}_${data.name}.jpg`;
+            link.download = `LJK_Scan_${data.kelas}_${data.peserta}_${data.name}.jpg`;
             link.href = document.getElementById('result-canvas').toDataURL('image/jpeg', 0.9);
             link.click();
         };
@@ -1201,7 +1201,13 @@
             let btnCancel = document.createElement('button'); btnCancel.className = "px-5 py-2.5 bg-slate-100 font-bold text-slate-600 rounded-lg hover:bg-slate-200 transition"; btnCancel.innerText = "Batal"; btnCancel.onclick = () => closeModal('result-modal');
             let btnUpdate = document.createElement('button'); btnUpdate.className = "px-5 py-2.5 bg-yellow-500 font-bold text-white rounded-lg hover:bg-yellow-600 transition flex-1"; btnUpdate.innerText = "Update Data";
             btnUpdate.onclick = () => { 
-                if (pendingUpdateIndex !== -1 && pendingUpdateData) { resultData[pendingUpdateIndex] = pendingUpdateData; updateTable(); closeModal('result-modal'); } 
+                if (pendingUpdateIndex !== -1 && pendingUpdateData) { 
+                    let updated = getUpdatedData();
+                    updated.id = resultData[pendingUpdateIndex].id;
+                    resultData[pendingUpdateIndex] = updated; 
+                    updateTable(); 
+                    closeModal('result-modal'); 
+                } 
             };
             
             actionsDiv.appendChild(btnDownload);
