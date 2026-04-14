@@ -252,6 +252,25 @@
     let isProcessing = false; 
     let pendingUpdateData = null, pendingUpdateIndex = -1, pendingDeleteId = null;
 
+    // --- LOCAL STORAGE INIT ---
+    try {
+        const savedData = localStorage.getItem('ljk_resultData_v67');
+        const savedCounter = localStorage.getItem('ljk_scanCounter_v67');
+        const savedKey = localStorage.getItem('ljk_answerKey_v67');
+        
+        if (savedData) resultData = JSON.parse(savedData);
+        if (savedCounter) scanCounter = parseInt(savedCounter);
+        if (savedKey) document.getElementById('answer-key').value = savedKey;
+    } catch(e) { console.error("Gagal memuat local storage:", e); }
+
+    function saveToLocal() {
+        try {
+            localStorage.setItem('ljk_resultData_v67', JSON.stringify(resultData));
+            localStorage.setItem('ljk_scanCounter_v67', scanCounter.toString());
+            localStorage.setItem('ljk_answerKey_v67', document.getElementById('answer-key').value);
+        } catch(e) { console.error("Gagal menyimpan local storage:", e); }
+    }
+
     let camStableFrames = 0;
     let camLostFrames = 0;
     let camLastFids = null;
@@ -276,6 +295,7 @@
     if (answerKeyInput) answerKeyInput.addEventListener('input', () => {
         const count = answerKeyInput.value.replace(/[^A-D]/gi, '').length;
         document.getElementById('lbl-answer-key').innerText = count > 0 ? `Kunci Jawaban (${count})` : `Kunci Jawaban (N)`;
+        localStorage.setItem('ljk_answerKey_v67', answerKeyInput.value);
     });
 
     function validateKey() {
@@ -605,11 +625,11 @@
             let scoreData = shared_gradeAnswers(gridData, ctx, key);
 
             let existingIndex = resultData.findIndex(d => d.peserta === peserta && d.kelas === kelas && peserta !== "-");
-            let dataRow = { name, kelas, peserta, ...scoreData };
-            if (existingIndex !== -1) { dataRow.id = resultData[existingIndex].id; showPopupResult(dataRow, true, existingIndex); } 
-            else { dataRow.id = scanCounter++; resultData.push(dataRow); showPopupResult(dataRow, false); updateTable(); }
-            
-            return true; 
+        let dataRow = { name, kelas, peserta, ...scoreData };
+        if (existingIndex !== -1) { dataRow.id = resultData[existingIndex].id; showPopupResult(dataRow, true, existingIndex); } 
+        else { dataRow.id = scanCounter++; resultData.push(dataRow); saveToLocal(); showPopupResult(dataRow, false); updateTable(); }
+        
+        return true; 
         } finally {
             gray.delete(); thresh.delete();
         }
@@ -1027,11 +1047,11 @@
             let scoreData = shared_gradeAnswers(gridData, ctx, key);
 
             let existingIndex = resultData.findIndex(d => d.peserta === peserta && d.kelas === kelas && peserta !== "-");
-            let dataRow = { name, kelas, peserta, ...scoreData };
-            if (existingIndex !== -1) { dataRow.id = resultData[existingIndex].id; showPopupResult(dataRow, true, existingIndex); } 
-            else { dataRow.id = scanCounter++; resultData.push(dataRow); showPopupResult(dataRow, false); updateTable(); }
-            
-            return true; 
+        let dataRow = { name, kelas, peserta, ...scoreData };
+        if (existingIndex !== -1) { dataRow.id = resultData[existingIndex].id; showPopupResult(dataRow, true, existingIndex); } 
+        else { dataRow.id = scanCounter++; resultData.push(dataRow); saveToLocal(); showPopupResult(dataRow, false); updateTable(); }
+        
+        return true; 
         } finally {
             gray.delete(); thresh.delete();
         }
@@ -1161,7 +1181,7 @@
     });
 
     document.getElementById('btn-confirm-delete').addEventListener('click', () => {
-        if (pendingDeleteId !== null) { resultData = resultData.filter(d => d.id !== pendingDeleteId); updateTable(); closeModal('confirm-modal'); }
+        if (pendingDeleteId !== null) { resultData = resultData.filter(d => d.id !== pendingDeleteId); updateTable(); saveToLocal(); closeModal('confirm-modal'); }
     });
 
     function showPopupResult(data, isDuplicate = false, index = -1) {
@@ -1206,6 +1226,7 @@
                     updated.id = resultData[pendingUpdateIndex].id;
                     resultData[pendingUpdateIndex] = updated; 
                     updateTable(); 
+                    saveToLocal();
                     closeModal('result-modal'); 
                 } 
             };
@@ -1222,6 +1243,7 @@
                 let idx = resultData.findIndex(d => d.id === updated.id);
                 if (idx !== -1) resultData[idx] = updated; 
                 updateTable();
+                saveToLocal();
                 closeModal('result-modal'); 
             };
             
@@ -1236,6 +1258,12 @@
         const ws = XLSX.utils.json_to_sheet(resultData.map(d => ({ "No": d.id, "Nama": d.name, "Kelas": d.kelas, "Benar": d.trueCount, "Salah": d.falseCount, "Kosong": d.emptyCount, "Detail Benar": d.correctNumbers.join(', '), "Detail Salah": d.wrongNumbers.join(', '), "Jawaban": d.answers.join('') })));
         const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "Rekap LJK");
         XLSX.writeFile(wb, `Rekap_LJK_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    });
+
+    // Menampilkan data tersimpan dari Local Storage saat aplikasi pertama kali dimuat
+    document.addEventListener('DOMContentLoaded', () => {
+        if (resultData.length > 0) updateTable();
+        if (answerKeyInput && answerKeyInput.value) answerKeyInput.dispatchEvent(new Event('input'));
     });
 </script>
 </body>
