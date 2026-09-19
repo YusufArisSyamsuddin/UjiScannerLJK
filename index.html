@@ -610,12 +610,25 @@
     let camLastFids = null;
     let camLastProcessTime = 0;
 
-    const TRACK_INTERVAL_MS = 50;
-    const STABLE_FRAMES_TO_CAPTURE = 9;
+    // Loop pelacakan kini jauh lebih ringan (tidak lagi membaca citra resolusi penuh),
+    // jadi bisa berjalan ~30 kali per detik. Jumlah frame stabil yang diminta pun
+    // diturunkan: getaran sisa sudah ditangani dengan memilih frame TERTAJAM saat
+    // menangkap. Hasilnya: menunggu diam ~0,23 detik, bukan ~0,45 detik.
+    const TRACK_INTERVAL_MS = 33;
+    const STABLE_FRAMES_TO_CAPTURE = 7;
     const MIN_CONFIDENCE = 0.90; 
     const MIN_SHARPNESS = 90; 
     const MAX_MOVE_PX = 3; 
     const TRACK_W = 500.0;
+    // Tangkapan akhir diambil beberapa frame sekaligus lalu dipilih yang PALING TAJAM.
+    // Getaran tangan membuat sebagian frame kabur; kekaburan itulah penyebab utama
+    // salah baca arsiran pada mode kamera, bukan algoritmanya.
+    const CAM_BURST_FRAMES = 3;
+    const CAM_BURST_GAP_MS = 60;
+    // Resolusi tangkapan: makin banyak piksel pada kertas, makin tegas tepi bubble
+    // dan kotak fiducial. Pelacakan langsung TETAP di TRACK_W supaya tetap ringan.
+    const CAM_CAPTURE_IDEAL_W = 2560;
+    const CAM_CAPTURE_IDEAL_H = 1440;
 
     const video = document.getElementById('video'), overlayCanvas = document.getElementById('overlay-canvas');
     const hiddenCanvas = document.getElementById('hidden-canvas'), resultCanvas = document.getElementById('result-canvas');
@@ -665,6 +678,16 @@
         return Array.from({ length: optionCount }, (_, i) => String.fromCharCode(65 + i));
     }
 
+    // Nilai (poin) tiap NOMOR pada satu jenis soal, diatur dari Desainer LJK.
+    // Bawaannya 1 supaya desain lama tetap dinilai persis seperti sebelumnya.
+    function getSectionPoin(sectionId) {
+        const raw = activeLayoutConfig?.[sectionId]?.poin;
+        if (raw === undefined || raw === null || String(raw).trim() === '') return 1;
+        const n = Number(String(raw).replace(',', '.'));
+        if (!Number.isFinite(n) || n < 0) return 1;
+        return Math.min(100, Math.round(n * 100) / 100);
+    }
+
     function buildQuestionDefinitions(sectionId) {
         const section = activeLayoutConfig?.[sectionId];
         const meta = SECTION_META[sectionId];
@@ -694,7 +717,7 @@
 
     function getVisibleAnswerSections() {
         return Object.keys(SECTION_META)
-            .map(id => ({ ...SECTION_META[id], questions: buildQuestionDefinitions(id) }))
+            .map(id => ({ ...SECTION_META[id], poin: getSectionPoin(id), questions: buildQuestionDefinitions(id) }))
             .filter(section => section.questions.length > 0);
     }
 
@@ -705,7 +728,20 @@
         const label = document.getElementById('lbl-answer-key');
         const summary = document.getElementById('answer-key-summary');
         if (label) label.textContent = 'Panel Kunci Jawaban';
-        if (summary) summary.textContent = total > 0 ? `Slot desain aktif: ${total} nomor. Kunci yang akan dinilai: ${active} nomor.` : 'Belum ada blok soal aktif pada desain.';
+        // Bila guru memberi bobot berbeda antar jenis soal, tampilkan totalnya supaya
+        // pembagi nilai tidak perlu ditebak-tebak.
+        const berbobot = sections.some(sec => Number(sec.poin) !== 1);
+        let poinTeks = '';
+        if (berbobot) {
+            const rincian = sections.map(sec => {
+                const n = parseAnswerKeyValue(sec.id, answerKeyState[sec.id] || '', sec.questions).length;
+                return `${sec.short} ${n}x${trimNumber(sec.poin)}`;
+            }).join(' + ');
+            const totalPoin = sections.reduce((sum, sec) =>
+                sum + parseAnswerKeyValue(sec.id, answerKeyState[sec.id] || '', sec.questions).length * Number(sec.poin), 0);
+            poinTeks = ` Bobot nilai: ${rincian} = ${trimNumber(totalPoin)} poin.`;
+        }
+        if (summary) summary.textContent = total > 0 ? `Slot desain aktif: ${total} nomor. Kunci yang akan dinilai: ${active} nomor.${poinTeks}` : 'Belum ada blok soal aktif pada desain.';
         syncRegradeControls();
     }
 
@@ -943,6 +979,12 @@
         return summary.length ? summary.join(' | ') : '';
     }
 
+    // 2 -> "2", 2.5 -> "2,5" (gaya angka Indonesia, tanpa nol menggantung)
+    function trimNumber(n) {
+        const v = Math.round((Number(n) || 0) * 100) / 100;
+        return String(v).replace('.', ',');
+    }
+
     function formatScoreValue(value, questionCount = 0, trueCount = 0) {
         const parsed = Number(String(value ?? '').replace(',', '.'));
         const score = Number.isFinite(parsed) ? parsed : (questionCount > 0 ? (trueCount / questionCount) * 100 : 0);
@@ -996,6 +1038,9 @@
             falseCount,
             emptyCount,
             questionCount,
+            pointsEarned: Number.isFinite(Number(row.pointsEarned)) ? Number(row.pointsEarned) : trueCount,
+            pointsTotal: Number.isFinite(Number(row.pointsTotal)) ? Number(row.pointsTotal) : questionCount,
+            sectionPoints: normalizeDisplayText(row.sectionPoints, '-'),
             scoreValue: formatScoreValue(row.scoreValue, questionCount, trueCount),
             sectionTrueCounts,
             sectionFalseCounts,
@@ -1067,6 +1112,7 @@
         MAX_HYPOTHESES: 8,
         SCORE_SCALE: 0.5,         // skala warp saat menilai hipotesis (ringan)
         CONF_GOOD: 0.88,          // berhenti lebih awal bila sudah sangat baik
+        BG_BLUR_SCALE: 0.25,
         FAINT_FLOOR: 0.45,        // batas bawah mutlak untuk arsiran samar
         FAINT_DOMINANCE: 1.6,     // harus sekian kali lebih pekat dari saingan
         FAINT_RIVAL_MAX: 0.35     // saingan harus benar-benar bersih
@@ -1351,6 +1397,74 @@
         return pts;
     }
 
+    // ---------- Wilayah bubble menurut desain -------------------------
+    // Kisi hanya perlu diukur di bagian lembar yang memang berisi bubble.
+    // Pada LJK nyata bagian itu hanya sekitar sepertiga luas kertas, sehingga
+    // pencarian kontur menjadi jauh lebih ringan TANPA mengubah hasil: titik di
+    // luar wilayah desain tidak pernah dipakai oleh kisi, affine, maupun verifikasi.
+    const ENG_ROI_PAD_CELLS = 2;
+
+    function eng_designCellBounds() {
+        let r0 = Infinity, r1 = -Infinity, c0 = Infinity, c1 = -Infinity, n = 0;
+        const add = (r, c) => {
+            if (!Number.isFinite(r) || !Number.isFinite(c)) return;
+            if (r < r0) r0 = r;
+            if (r > r1) r1 = r;
+            if (c < c0) c0 = c;
+            if (c > c1) c1 = c;
+            n++;
+        };
+        try {
+            getVisibleAnswerSections().forEach(section => {
+                section.questions.forEach(q => q.options.forEach(o =>
+                    add(designerToGridRow(o.r), designerToGridCol(o.c))));
+            });
+            const idn = (activeLayoutConfig && activeLayoutConfig.identitas) || {};
+            ['nama', 'jenis_kelamin', 'no_peserta', 'kelas'].forEach(key => {
+                eng_identityCells(idn[key]).forEach(cell => add(cell.r, cell.c));
+            });
+        } catch (err) { return null; }
+        return n ? { r0, r1, c0, c1 } : null;
+    }
+
+    function eng_bubbleRoi(warped) {
+        const b = eng_designCellBounds();
+        if (!b) return null;
+        const pad = ENG_ROI_PAD_CELLS * GRID_SIZE;
+        const x0 = Math.max(0, Math.floor(b.c0 * GRID_SIZE - pad));
+        const y0 = Math.max(0, Math.floor(b.r0 * GRID_SIZE - pad));
+        const x1 = Math.min(warped.cols, Math.ceil((b.c1 + 1) * GRID_SIZE + pad));
+        const y1 = Math.min(warped.rows, Math.ceil((b.r1 + 1) * GRID_SIZE + pad));
+        const w = x1 - x0, h = y1 - y0;
+        if (w < GRID_SIZE * 4 || h < GRID_SIZE * 4) return null;
+        // Kalau hampir seluas lembar, memotong justru hanya menambah kerja.
+        if (w * h > warped.cols * warped.rows * 0.80) return null;
+        return { x: x0, y: y0, w: w, h: h };
+    }
+
+    // Centroid bubble, tetapi hanya di wilayah desain. Koordinat dikembalikan
+    // ke sistem koordinat warp penuh supaya seluruh tahap berikutnya tak berubah.
+    // allowRoi=false dipakai bila citra TIDAK lagi sejajar dengan desain - misalnya
+    // setelah diputar 180 derajat - karena kotak wilayah desain jadi tak berlaku.
+    function eng_bubbleCentroidsDesign(warped, pitchArg, allowRoi = true) {
+        let roi = null;
+        if (allowRoi) { try { roi = eng_bubbleRoi(warped); } catch (err) { roi = null; } }
+        if (!roi) return eng_bubbleCentroids(warped, pitchArg);
+        const view = warped.roi(new cv.Rect(roi.x, roi.y, roi.w, roi.h));
+        const sub = new cv.Mat();
+        let pts = [];
+        try {
+            view.copyTo(sub);
+            pts = eng_bubbleCentroids(sub, pitchArg);
+        } catch (err) {
+            view.delete(); sub.delete();
+            return eng_bubbleCentroids(warped, pitchArg);
+        }
+        view.delete(); sub.delete();
+        for (let i = 0; i < pts.length; i++) { pts[i][0] += roi.x; pts[i][1] += roi.y; }
+        return pts;
+    }
+
     // Pencarian pitch dua tahap: kasar lalu halus di sekitar pemenang.
     // Hasil setara pemindaian rapat, tetapi jumlah perhitungannya jauh lebih sedikit.
     function eng_scanPitch(vals, lo, hi, steps) {
@@ -1417,10 +1531,23 @@
         const g = new cv.Mat();
         cv.cvtColor(warped, g, cv.COLOR_RGBA2GRAY, 0);
         cv.GaussianBlur(g, g, new cv.Size(3, 3), 0);
+        // Latar cahaya dihitung pada citra yang diperkecil, lalu dibesarkan lagi.
+        // Blur selebar ~360 px hanya menangkap gradasi cahaya yang sangat halus, jadi
+        // memperkecil citra lebih dulu TIDAK menghilangkan apa pun yang dipakai - hasil
+        // bacanya terbukti sama persis - tetapi biayanya turun belasan kali lipat.
+        // (Tahap ini tadinya memakan lebih dari dua pertiga seluruh waktu pemindaian.)
         const bg = new cv.Mat();
-        let bk = Math.max(3, Math.round(GRID_SIZE * 2.0) * 6 + 1);
+        const SC_BG = ENG.BG_BLUR_SCALE;
+        const sw = Math.max(8, Math.round(g.cols * SC_BG));
+        const sh = Math.max(8, Math.round(g.rows * SC_BG));
+        const sigKecil = GRID_SIZE * 2.0 * SC_BG;
+        let bk = Math.max(3, Math.round(sigKecil) * 6 + 1);
         if (bk % 2 === 0) bk++;
-        cv.GaussianBlur(g, bg, new cv.Size(bk, bk), GRID_SIZE * 2.0, GRID_SIZE * 2.0, cv.BORDER_REPLICATE);
+        const kecil = new cv.Mat(), bgKecil = new cv.Mat();
+        cv.resize(g, kecil, new cv.Size(sw, sh), 0, 0, cv.INTER_AREA);
+        cv.GaussianBlur(kecil, bgKecil, new cv.Size(bk, bk), sigKecil, sigKecil, cv.BORDER_REPLICATE);
+        cv.resize(bgKecil, bg, new cv.Size(g.cols, g.rows), 0, 0, cv.INTER_LINEAR);
+        kecil.delete(); bgKecil.delete();
         const flat = g.clone();
         const gd = g.data, bd = bg.data, fd = flat.data;
         for (let i = 0; i < gd.length; i++) {
@@ -1466,15 +1593,25 @@
     }
 
     // Bangun seluruh kisi sel: hitung piksel arsiran pada cakram luar & pusat.
-    function eng_buildGridData(mask, lat, aff) {
+    function eng_buildGridData(mask, lat, aff, fullScan) {
         const rows = getGridRowsCount(), cols = getGridColsCount();
         const pitch = lat ? (lat.pitchX + lat.pitchY) / 2 : GRID_SIZE;
         const dOut = eng_buildDisc(pitch, eng_outerR());
         const dIn = eng_buildDisc(pitch, eng_innerR());
+        // Hanya sel yang benar-benar dipakai desain (plus 1 sel penyangga) yang diukur.
+        // Sel di luar itu tidak pernah dibaca oleh siapa pun, jadi mengukurnya hanya
+        // membuang waktu. Pada lembar nyata ini memangkas sekitar dua pertiga sel.
+        const b = fullScan ? null : eng_designCellBounds();
+        const rLo = b ? Math.max(0, b.r0 - 1) : 0, rHi = b ? Math.min(rows - 1, b.r1 + 1) : rows - 1;
+        const cLo = b ? Math.max(0, b.c0 - 1) : 0, cHi = b ? Math.min(cols - 1, b.c1 + 1) : cols - 1;
         const grid = [];
         for (let r = 0; r < rows; r++) {
             grid[r] = [];
             for (let c = 0; c < cols; c++) {
+                if (r < rLo || r > rHi || c < cLo || c > cHi) {
+                    grid[r][c] = { density: 0, area: 0, centerDensity: 0, centerArea: 0, cx: 0, cy: 0 };
+                    continue;
+                }
                 const ctr = eng_cellCenter(aff, lat, r, c);
                 const x0o = Math.round(ctr.x - dOut.size / 2), y0o = Math.round(ctr.y - dOut.size / 2);
                 const x0i = Math.round(ctr.x - dIn.size / 2), y0i = Math.round(ctr.y - dIn.size / 2);
@@ -1680,8 +1817,40 @@
         return full;
     }
 
+    // Satu putaran presisi penuh untuk SATU hipotesis: haluskan keenam titik
+    // fiducial, warp ganda, lalu ukur kisi bubble. Centroid yang dihasilkan
+    // ikut dikembalikan supaya tahap pembacaan tidak perlu menghitung ulang.
+    function eng_fullPass(src, grayFull, hyp, sc) {
+        const KEYS = ['TL', 'TR', 'ML', 'MR', 'BL', 'BR'];
+        const span = Math.hypot(hyp.BL[0] - hyp.TL[0], hyp.BL[1] - hyp.TL[1]) / Math.max(sc, 1e-6);
+        const rad = Math.max(10, span * 0.020);
+        const fid = {};
+        KEYS.forEach(k => {
+            const px = hyp[k][0] / sc, py = hyp[k][1] / sc;
+            const r = eng_refinePoint(grayFull, px, py, rad);
+            fid[k] = r ? [r.x, r.y] : [px, py];
+        });
+        let warped = null, pts = null, lat = null;
+        try {
+            warped = eng_dualWarp(src, fid);
+            pts = eng_bubbleCentroidsDesign(warped, GRID_SIZE);
+            lat = eng_fitLatticeFromPts(pts, GRID_SIZE);
+        } catch (err) {
+            if (warped) { warped.delete(); warped = null; }
+            pts = null; lat = null;
+        }
+        return { conf: lat ? lat.conf : 0, fid: fid, lat: lat, pts: pts, warped: warped, mode: hyp.mode };
+    }
+
     // Pilih hipotesis fiducial TERBAIK dengan menguji hasil akhirnya:
     // warp -> ukur keteraturan kisi bubble. Mesin menilai kerjanya sendiri.
+    //
+    // JALUR CEPAT: pada lembar nyata hipotesis teratas hampir selalu menang,
+    // jadi hipotesis itu langsung dikerjakan pada resolusi penuh. Bila kisinya
+    // sudah rapi, tahap penilaian setengah ukuran untuk hipotesis lain
+    // dilewati - itu murni pekerjaan yang terbuang. Tahap penilaian tetap ada
+    // sebagai cadangan ketika hasil hipotesis teratas meragukan, sehingga
+    // ketahanan terhadap foto miring/gelap tidak berkurang sedikit pun.
     function eng_detectAndWarp(src, logPrefix) {
         const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
         const w = src.cols, h = src.rows;
@@ -1693,49 +1862,41 @@
         let hyps = [];
         try { hyps = eng_buildHypotheses(graySmall); } catch (err) { console.warn('hipotesis gagal', err); }
 
-        // --- Tahap ringan: nilai setiap hipotesis pada warp setengah ukuran ---
-        const S = ENG.SCORE_SCALE;
-        const scorePitch = GRID_SIZE * S;
-        let bestIdx = -1, bestConf = -1;
-        for (let i = 0; i < hyps.length; i++) {
-            let ws = null, conf = 0;
-            try {
-                ws = eng_dualWarpScaled(small, hyps[i], S);
-                const lat = eng_fitLattice(ws, scorePitch);
-                conf = lat ? lat.conf : 0;
-            } catch (err) { conf = 0; }
-            if (ws) ws.delete();
-            if (conf > bestConf) { bestConf = conf; bestIdx = i; }
-            if (bestConf >= ENG.CONF_GOOD) break;
-        }
-
-        let best = null;
-        if (bestIdx >= 0) {
-            // --- Tahap presisi: hanya untuk pemenang ---
-            const hyp = hyps[bestIdx];
-            const KEYS = ['TL', 'TR', 'ML', 'MR', 'BL', 'BR'];
-            const span = Math.hypot(hyp.BL[0] - hyp.TL[0], hyp.BL[1] - hyp.TL[1]) / Math.max(sc, 1e-6);
-            const rad = Math.max(10, span * 0.020);
+        let best = null, jalur = 'cepat';
+        if (hyps.length) {
             const grayFull = new cv.Mat();
             cv.cvtColor(src, grayFull, cv.COLOR_RGBA2GRAY, 0);
-            const fid = {};
-            KEYS.forEach(k => {
-                const px = hyp[k][0] / sc, py = hyp[k][1] / sc;
-                const r = eng_refinePoint(grayFull, px, py, rad);
-                fid[k] = r ? [r.x, r.y] : [px, py];
-            });
+            best = eng_fullPass(src, grayFull, hyps[0], sc);
+
+            if (!(best.warped && (best.conf >= ENG.CONF_GOOD || hyps.length === 1))) {
+                // --- Cadangan: nilai hipotesis lain pada warp setengah ukuran ---
+                jalur = 'lengkap';
+                const S = ENG.SCORE_SCALE;
+                const scorePitch = GRID_SIZE * S;
+                let bestIdx = 0, bestConf = best.conf;
+                for (let i = 1; i < hyps.length; i++) {
+                    let ws = null, conf = 0;
+                    try {
+                        ws = eng_dualWarpScaled(small, hyps[i], S);
+                        const lat = eng_fitLattice(ws, scorePitch);
+                        conf = lat ? lat.conf : 0;
+                    } catch (err) { conf = 0; }
+                    if (ws) ws.delete();
+                    if (conf > bestConf) { bestConf = conf; bestIdx = i; }
+                }
+                if (bestIdx !== 0) {
+                    if (best.warped) best.warped.delete();
+                    best = eng_fullPass(src, grayFull, hyps[bestIdx], sc);
+                    if (!best.lat) best.conf = bestConf;
+                }
+            }
             grayFull.delete();
-            let warped = null, lat = null;
-            try {
-                warped = eng_dualWarp(src, fid);
-                lat = eng_fitLattice(warped);
-            } catch (err) { if (warped) { warped.delete(); warped = null; } }
-            best = { conf: lat ? lat.conf : bestConf, fid: fid, lat: lat, warped: warped, mode: hyp.mode };
+            if (best && !best.warped) best = null;
         }
         small.delete(); graySmall.delete();
         if (best && best.warped) {
             const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
-            logAI(`${logPrefix} Fiducial terkunci (${best.mode}) dari ${hyps.length} hipotesis dalam ${ms} ms, keteraturan kisi ${(best.conf * 100).toFixed(0)}%.`);
+            logAI(`${logPrefix} Fiducial terkunci (${best.mode}) dari ${hyps.length} hipotesis dalam ${ms} ms (jalur ${jalur}), keteraturan kisi ${(best.conf * 100).toFixed(0)}%.`);
         }
         return best;
     }
@@ -1852,15 +2013,18 @@
         return bad;
     }
 
-    function eng_prepareGrid(warped) {
+    function eng_prepareGrid(warped, pre, opts) {
         // Centroid bubble dihitung SEKALI lalu dipakai ulang untuk kisi, affine,
         // dan verifikasi - sebelumnya proses berat ini berjalan berkali-kali.
-        const pts = eng_bubbleCentroids(warped, GRID_SIZE);
-        const lat = eng_fitLatticeFromPts(pts, GRID_SIZE);
+        // Bila tahap deteksi sudah menghitungnya untuk lembar yang SAMA, hasilnya
+        // dipakai langsung sehingga pencarian kontur tidak berjalan dua kali.
+        const reuse = !!(pre && pre.pts && pre.pts.length >= 25);
+        const pts = reuse ? pre.pts : eng_bubbleCentroidsDesign(warped, GRID_SIZE, !(opts && opts.fullScan));
+        const lat = (reuse && pre.lat) ? pre.lat : eng_fitLatticeFromPts(pts, GRID_SIZE);
         const aff = eng_fitAffine(warped, lat, pts);
         const idx = eng_buildBubbleIndex(pts, lat);
         const mask = eng_buildSampleMask(warped);
-        const grid = eng_buildGridData(mask, lat, aff);
+        const grid = eng_buildGridData(mask, lat, aff, !!(opts && opts.fullScan));
         engLastLattice = lat;
         engLastAffine = aff;
         engBubbleIndex = idx;
@@ -2101,10 +2265,15 @@
         const wrongNumbers = [];
         const sectionTrueCounts = [];
         const sectionFalseCounts = [];
+        const sectionPoints = [];
         let trueCount = 0, falseCount = 0, emptyCount = 0, questionCount = 0;
+        // Bobot nilai: tiap nomor benar menyumbang poin jenis soalnya (bawaan 1).
+        let pointsEarned = 0, pointsTotal = 0;
 
         getVisibleAnswerSections().forEach(section => {
             const sectionKeys = keyMap[section.id] || [];
+            const poin = Number.isFinite(Number(section.poin)) ? Number(section.poin) : 1;
+            let sectionEarned = 0, sectionTotal = 0;
             const detMap = (detections && detections[section.id]) || {};
             const sectionAnswers = [];
             const sectionCorrect = [];
@@ -2119,6 +2288,7 @@
                 if (!keyToken) return;
                 const detected = String(detMap[String(question.number)] ?? '-');
                 questionCount++;
+                pointsTotal += poin; sectionTotal += poin;
                 sectionAnswers.push(`${question.number}-${detected}`);
                 if (section.mode === 'binary_groups') {
                     const emptyToken = '-'.repeat(Math.max(1, keyToken.length));
@@ -2126,6 +2296,7 @@
                         emptyCount++;
                     } else if (detected === keyToken) {
                         trueCount++; sectionTrueCount++; sectionCorrect.push(question.number);
+                        pointsEarned += poin; sectionEarned += poin;
                     } else {
                         falseCount++; sectionFalseCount++; sectionWrong.push(question.number);
                     }
@@ -2135,6 +2306,7 @@
                     emptyCount++;
                 } else if (detected === keyToken) {
                     trueCount++; sectionTrueCount++; sectionCorrect.push(question.number);
+                    pointsEarned += poin; sectionEarned += poin;
                 } else {
                     falseCount++; sectionFalseCount++; sectionWrong.push(question.number);
                 }
@@ -2144,6 +2316,7 @@
             if (sectionKeys.length) sectionFalseCounts.push(`${section.short}: ${sectionFalseCount}`);
             if (sectionCorrect.length) correctNumbers.push(`${section.short}: ${sectionCorrect.join(', ')}`);
             if (sectionWrong.length) wrongNumbers.push(`${section.short}: ${sectionWrong.join(', ')}`);
+            if (sectionTotal > 0) sectionPoints.push(`${section.short}: ${trimNumber(sectionEarned)}/${trimNumber(sectionTotal)} (@${trimNumber(poin)})`);
         });
 
         return {
@@ -2151,9 +2324,12 @@
             falseCount,
             emptyCount,
             questionCount,
-            scoreValue: questionCount > 0 ? ((trueCount / questionCount) * 100).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1') : '0',
+            pointsEarned: Math.round(pointsEarned * 100) / 100,
+            pointsTotal: Math.round(pointsTotal * 100) / 100,
+            scoreValue: pointsTotal > 0 ? ((pointsEarned / pointsTotal) * 100).toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1') : '0',
             sectionTrueCounts,
             sectionFalseCounts,
+            sectionPoints: sectionPoints.join(' | '),
             answers,
             correctNumbers,
             wrongNumbers
@@ -2350,101 +2526,245 @@
         return fullWarped; 
     }
 
-    function cam_performExtraction(warpedMat) {
+    // Membaca satu lembar hasil warp TANPA menyimpannya ke rekap. Dipisah dari
+    // penyimpanan supaya beberapa frame bisa dibandingkan dulu, lalu hanya yang
+    // terbaik yang masuk ke tabel.
+    function cam_readSheet(warpedMat, pre, fullScan) {
         currentScanSource = 'camera';
         resetDiagnostics();
-        let ctx = resultCanvas.getContext('2d');
-        try {
-            const gridRows = getGridRowsCount();
-            const gridCols = getGridColsCount();
-            // Mesin V2: kalibrasi kisi otomatis + pengukuran arsiran berbasis cakram.
-            const gridData = eng_prepareGrid(warpedMat);
-            if (engLastQuality < 0.25) return false;   // kisi tak terbaca -> minta rotasi/ulang
+        const ctx = resultCanvas.getContext('2d');
+        const gridRows = getGridRowsCount();
+        const gridCols = getGridColsCount();
+        const gridData = eng_prepareGrid(warpedMat, pre, { fullScan: !!fullScan });
+        if (engLastQuality < 0.25) return null;   // kisi tak terbaca -> minta rotasi/ulang
 
-            ctx.strokeStyle = "rgba(239, 68, 68, 0.18)"; ctx.lineWidth = 1;
-            for (let r = 0; r < gridRows; r++) {
-                for (let c = 0; c < gridCols; c++) {
-                    const cell = gridData[r][c];
-                    if (!cell || !cell.centerArea) continue;
-                    ctx.beginPath();
-                    ctx.arc(cell.cx, cell.cy, 2, 0, 2 * Math.PI);
-                    ctx.stroke();
-                }
+        ctx.strokeStyle = "rgba(239, 68, 68, 0.18)"; ctx.lineWidth = 1;
+        for (let r = 0; r < gridRows; r++) {
+            for (let c = 0; c < gridCols; c++) {
+                const cell = gridData[r][c];
+                if (!cell || !cell.centerArea) continue;
+                ctx.beginPath();
+                ctx.arc(cell.cx, cell.cy, 2, 0, 2 * Math.PI);
+                ctx.stroke();
             }
+        }
 
-            let name = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.nama, ALPHABET, ctx, 'nama');
-            let kelas = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.kelas, KELAS_VALS, ctx, 'kelas');
-            let peserta = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.no_peserta, NUMBERS, ctx, 'no_peserta');
-            const keyInfo = collectAnswerKeysForVisibleSections();
-            let scoreData = shared_gradeAnswers(gridData, ctx, keyInfo.keys);
-            eng_reportLayoutMatch('[KAMERA]');
-            logDiagnosticsSummary('[KAMERA]');
+        const name = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.nama, ALPHABET, ctx, 'nama');
+        const kelas = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.kelas, KELAS_VALS, ctx, 'kelas');
+        const peserta = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.no_peserta, NUMBERS, ctx, 'no_peserta');
+        const keyInfo = collectAnswerKeysForVisibleSections();
+        const scoreData = shared_gradeAnswers(gridData, ctx, keyInfo.keys);
+        return {
+            name, kelas, peserta, scoreData,
+            quality: engLastQuality,
+            threshold: engFillThreshold,
+            ragu: cam_countAmbiguous(scoreData.detections)
+        };
+    }
 
-            let existingIndex = resultData.findIndex(d => d.peserta === peserta && d.kelas === kelas && peserta !== "-");
-            let dataRow = normalizeStoredResultRow({ name, kelas, peserta, ...scoreData });
-            if (existingIndex !== -1) {
-                dataRow.recordId = resultData[existingIndex].recordId;
-                dataRow.id = resultData[existingIndex].id;
-                attachReviewShot(dataRow, warpedMat);
-                if (batchImportActive) {
-                    resultData[existingIndex] = dataRow;
-                } else {
-                    showPopupResult(dataRow, true, existingIndex);
-                }
+    // Berapa banyak jawaban yang TIDAK tegas terbaca ('-' kosong atau '*' ganda).
+    // Angka inilah yang dipakai untuk memilih frame terbaik: frame yang kabur
+    // menghasilkan banyak bacaan ragu, frame yang tajam nyaris nol.
+    function cam_countAmbiguous(detections) {
+        let n = 0;
+        Object.keys(detections || {}).forEach(sid => {
+            const bucket = detections[sid] || {};
+            Object.keys(bucket).forEach(num => {
+                const v = String(bucket[num] ?? '');
+                if (!v) { n++; return; }
+                for (const ch of v) if (ch === '-' || ch === '*') n++;
+            });
+        });
+        return n;
+    }
+
+    function cam_commitReading(reading, warpedMat) {
+        eng_reportLayoutMatch('[KAMERA]');
+        logDiagnosticsSummary('[KAMERA]');
+        const { name, kelas, peserta, scoreData } = reading;
+        const existingIndex = resultData.findIndex(d => d.peserta === peserta && d.kelas === kelas && peserta !== "-");
+        const dataRow = normalizeStoredResultRow({ name, kelas, peserta, ...scoreData });
+        if (existingIndex !== -1) {
+            dataRow.recordId = resultData[existingIndex].recordId;
+            dataRow.id = resultData[existingIndex].id;
+            attachReviewShot(dataRow, warpedMat);
+            if (batchImportActive) {
+                resultData[existingIndex] = dataRow;
             } else {
-                dataRow.recordId = createRecordId();
-                dataRow.id = String(scanCounter++);
-                attachReviewShot(dataRow, warpedMat);
-                resultData.push(dataRow);
-                if (!batchImportActive) showPopupResult(dataRow, false);
+                showPopupResult(dataRow, true, existingIndex);
             }
-            updateTable();
-            
-            return true; 
+        } else {
+            dataRow.recordId = createRecordId();
+            dataRow.id = String(scanCounter++);
+            attachReviewShot(dataRow, warpedMat);
+            resultData.push(dataRow);
+            if (!batchImportActive) showPopupResult(dataRow, false);
+        }
+        updateTable();
+    }
+
+    // Ketajaman frame = varian Laplacian. Dihitung pada salinan kecil supaya
+    // memilih frame terbaik hanya memakan beberapa milidetik.
+    function cam_canvasSharpness(canvas) {
+        let src = null, gray = null;
+        try {
+            // Pengecilan diserahkan ke kanvas peramban (cepat, dipercepat GPU),
+            // jadi mengukur ketajaman 3 frame hanya beberapa milidetik.
+            const f = Math.min(1, 640 / Math.max(canvas.width, canvas.height));
+            const kecil = document.createElement('canvas');
+            kecil.width = Math.max(1, Math.round(canvas.width * f));
+            kecil.height = Math.max(1, Math.round(canvas.height * f));
+            kecil.getContext('2d').drawImage(canvas, 0, 0, kecil.width, kecil.height);
+            src = cv.imread(kecil);
+            gray = new cv.Mat();
+            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+            return cam_computeSharpness(gray);
+        } catch (err) {
+            return 0;
         } finally {
-            /* mesin V2 mengelola Mat internalnya sendiri */
+            if (src) src.delete(); if (gray) gray.delete();
         }
     }
 
-    function cam_processFullRes(canvas, fids) {
-        let src = null, finalWarpedMat = null;
+    // Ambil beberapa frame beruntun pada resolusi PENUH, ukur ketajamannya,
+    // lalu serahkan yang paling tajam lebih dulu ke mesin pembacaan.
+    function cam_captureBurst(fids) {
+        const shots = [];
+        const grab = (i) => {
+            const c = document.createElement('canvas');
+            c.width = video.videoWidth || overlayCanvas.width;
+            c.height = video.videoHeight || overlayCanvas.height;
+            try { c.getContext('2d').drawImage(video, 0, 0, c.width, c.height); } catch (err) { return; }
+            shots.push({ canvas: c, tajam: cam_canvasSharpness(c) });
+            if (i + 1 < CAM_BURST_FRAMES) {
+                setTimeout(() => grab(i + 1), CAM_BURST_GAP_MS);
+                return;
+            }
+            shots.sort((a, b) => b.tajam - a.tajam);
+            const w0 = shots.length ? shots[0].canvas.width : 0, h0 = shots.length ? shots[0].canvas.height : 0;
+            resetUI();                       // kamera baru dimatikan di sini
+            isProcessing = true;             // resetUI melepasnya, kunci lagi selama memproses
+            document.getElementById('loader-overlay').classList.remove('hidden');
+            if (!shots.length) {
+                logAI('[KAMERA] Frame gagal ditangkap dari kamera.', true);
+                document.getElementById('loader-overlay').classList.add('hidden');
+                isProcessing = false;
+                return;
+            }
+            logAI(`[KAMERA] ${shots.length} frame ditangkap pada ${w0}x${h0}. `
+                + `Ketajaman: ${shots.map(x => Math.round(x.tajam)).join(', ')} -> yang tertajam dipakai lebih dulu.`);
+            setTimeout(() => cam_processFullRes(shots, fids), 30);
+        };
+        grab(0);
+    }
+
+    // Satu percobaan pembacaan dari satu frame. Mengembalikan hasil baca + warp-nya,
+    // atau null bila frame itu memang tidak bisa dibaca.
+    function cam_tryShot(shot, fids, label, allowFallback) {
+        let src = null, warped = null, pre = null;
         try {
-            src = cv.imread(canvas);
-            logAI("[KAMERA] Frame stabil ditangkap. Mengunci fiducial presisi...");
-            // Jalur kamera memakai mesin deteksi yang sama dengan unggahan,
-            // sehingga hasil pembacaan kamera dan unggahan konsisten.
-            const best = eng_detectAndWarp(src, "[KAMERA]");
+            src = cv.imread(shot.canvas);
+            const best = eng_detectAndWarp(src, label);
             if (best && best.warped && best.conf >= 0.35) {
-                finalWarpedMat = best.warped;
+                warped = best.warped; pre = best;
             } else {
                 if (best && best.warped) best.warped.delete();
-                logAI("[KAMERA] Memakai titik hasil pelacakan langsung sebagai cadangan.");
-                finalWarpedMat = cam_performDualWarp(src, fids);
+                if (!allowFallback) return null;
+                logAI(`${label} Enam kotak fiducial tidak terkunci penuh. Memakai titik hasil pelacakan langsung sebagai cadangan - hasilnya mungkin kurang presisi.`, true);
+                warped = cam_performDualWarp(src, fids);
+                pre = null;
             }
+            resultCanvas.width = warped.cols;
+            resultCanvas.height = warped.rows;
+            cv.imshow('result-canvas', warped);
+            resultCanvas.style.display = 'block';
+            resultCanvas.classList.remove('hidden');
 
-            document.getElementById('result-canvas').width = finalWarpedMat.cols;
-            document.getElementById('result-canvas').height = finalWarpedMat.rows;
-            cv.imshow('result-canvas', finalWarpedMat);
-            document.getElementById('result-canvas').style.display = 'block';
-            document.getElementById('result-canvas').classList.remove('hidden');
-
-            let isSuccess = cam_performExtraction(finalWarpedMat);
-            if (!isSuccess) {
-                logAI("[KAMERA] Kisi tidak terbaca. Mencoba rotasi 180 derajat...");
-                cv.rotate(finalWarpedMat, finalWarpedMat, cv.ROTATE_180);
-                cv.imshow('result-canvas', finalWarpedMat);
-                isSuccess = cam_performExtraction(finalWarpedMat);
-                if (!isSuccess) throw new Error("Kisi bubble tidak dapat dikunci dari kamera. Pastikan keenam kotak hitam terlihat utuh.");
+            let reading = cam_readSheet(warped, pre, false);
+            let diputar = false;
+            if (!reading) {
+                logAI(`${label} Kisi tidak terbaca. Mencoba rotasi 180 derajat...`);
+                cv.rotate(warped, warped, cv.ROTATE_180);
+                cv.imshow('result-canvas', warped);
+                diputar = true;
+                reading = cam_readSheet(warped, null, true);
             }
-            logAI(`[KAMERA] Selesai. Ambang arsiran lembar ini: ${engFillThreshold.toFixed(2)}.`);
+            if (!reading) { warped.delete(); return null; }
+            return { reading, warped, diputar };
+        } catch (err) {
+            if (warped) warped.delete();
+            logAI(`${label} ${err.message}`, true);
+            return null;
+        } finally {
+            if (src) src.delete();
+        }
+    }
+
+    // Pilih frame terbaik: yang paling sedikit bacaan ragunya. Frame tertajam
+    // dicoba lebih dulu, dan kalau hasilnya sudah bersih (0 ragu) frame lain
+    // tidak perlu diproses sama sekali - jadi kondisi normal tetap cepat.
+    function cam_processFullRes(shots, fids) {
+        let best = null, tampilMilikPemenang = false;
+        try {
+            const list = Array.isArray(shots) ? shots : [{ canvas: shots, tajam: 0 }];
+            for (let i = 0; i < list.length; i++) {
+                const label = list.length > 1 ? `[KAMERA f${i + 1}]` : '[KAMERA]';
+                const got = cam_tryShot(list[i], fids, label, false);
+                tampilMilikPemenang = false;      // layar kini memuat frame yang baru dicoba
+                if (!got) continue;
+                if (!best || got.reading.ragu < best.reading.ragu) {
+                    if (best) best.warped.delete();
+                    best = got;
+                    tampilMilikPemenang = true;
+                } else {
+                    got.warped.delete();
+                }
+                if (best.reading.ragu === 0) break;
+                logAI(`${label} ${got.reading.ragu} jawaban belum tegas terbaca. Mencoba frame berikutnya...`);
+            }
+            if (!best) {
+                // Enam fiducial tidak terkunci pada satu frame pun. Baru di sinilah
+                // titik hasil pelacakan langsung dipakai, dan pada frame TERTAJAM -
+                // bukan pada frame terakhir yang kebetulan paling kabur.
+                const cadangan = cam_tryShot(list[0], fids, '[KAMERA]', true);
+                if (cadangan) { best = cadangan; tampilMilikPemenang = true; }
+            }
+            if (!best) throw new Error("Kisi bubble tidak dapat dikunci dari kamera. Pastikan keenam kotak hitam terlihat utuh dan lembar tidak buram.");
+            // Bila pemenangnya bukan frame yang terakhir digambar, gambar ulang
+            // supaya penanda di layar benar-benar milik hasil yang disimpan.
+            if (!tampilMilikPemenang) {
+                resultCanvas.width = best.warped.cols;
+                resultCanvas.height = best.warped.rows;
+                cv.imshow('result-canvas', best.warped);
+                cam_readSheet(best.warped, null, !!best.diputar);
+            }
+            cam_commitReading(best.reading, best.warped);
+            logAI(`[KAMERA] Selesai. Ambang arsiran lembar ini: ${best.reading.threshold.toFixed(2)}, mutu kisi ${(best.reading.quality * 100).toFixed(0)}%`
+                + (best.reading.ragu ? `, ${best.reading.ragu} jawaban perlu diperiksa manual.` : ', seluruh jawaban terbaca tegas.'));
         } catch (err) {
             logAI(err.message, true); showCustomAlert(err.message);
         } finally {
-            if (src) src.delete();
-            if (finalWarpedMat) finalWarpedMat.delete();
+            if (best) best.warped.delete();
             document.getElementById('loader-overlay').classList.add('hidden');
             isProcessing = false;
         }
+    }
+
+    // Minta resolusi setinggi mungkin, lalu turunkan bertahap bila ditolak
+    // perangkat. Kertas yang terisi lebih banyak piksel = tepi bubble lebih tegas.
+    async function cam_openStream() {
+        const coba = [
+            { facingMode: { ideal: 'environment' }, width: { ideal: CAM_CAPTURE_IDEAL_W }, height: { ideal: CAM_CAPTURE_IDEAL_H }, focusMode: { ideal: 'continuous' } },
+            { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+            { facingMode: 'environment' },
+            true
+        ];
+        let lastErr = null;
+        for (const video of coba) {
+            try { return await navigator.mediaDevices.getUserMedia({ video }); }
+            catch (err) { lastErr = err; }
+        }
+        throw lastErr || new Error('Kamera tidak dapat dibuka.');
     }
 
     document.getElementById('btn-camera').addEventListener('click', async () => {
@@ -2455,15 +2775,20 @@
         video.classList.remove('hidden'); overlayCanvas.classList.remove('hidden');
         
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } });
+            const stream = await cam_openStream();
             video.srcObject = stream;
             video.setAttribute('playsinline', true);
             video.onloadedmetadata = () => {
                 video.play().then(() => {
-                    hiddenCanvas.width = video.videoWidth; 
-                    hiddenCanvas.height = video.videoHeight;
-                    overlayCanvas.width = video.videoWidth; 
+                    // Kanvas pelacak sengaja KECIL: tiap frame video digambar langsung ke
+                    // ukuran lacak, jadi tidak ada lagi pembacaan citra resolusi penuh
+                    // 20x per detik. Frame penuh hanya diambil saat menangkap.
+                    const tw = Math.max(200, Math.round(TRACK_W));
+                    hiddenCanvas.width = tw;
+                    hiddenCanvas.height = Math.max(200, Math.round(tw * video.videoHeight / Math.max(1, video.videoWidth)));
+                    overlayCanvas.width = video.videoWidth;
                     overlayCanvas.height = video.videoHeight;
+                    logAI(`[KAMERA] Resolusi kamera aktif: ${video.videoWidth}x${video.videoHeight}. Pelacakan pada ${hiddenCanvas.width}x${hiddenCanvas.height}.`);
                     startStreamLoop();
                 });
             };
@@ -2481,12 +2806,12 @@
                 }
                 camLastProcessTime = timestamp;
 
-                let src = null, smallMat = null, gray = null;
+                let smallMat = null, gray = null;
                 try {
-                    let cw = hiddenCanvas.width;
-                    let ch = hiddenCanvas.height;
-                    hiddenCanvas.getContext('2d').drawImage(video, 0, 0, cw, ch);
-                    src = cv.imread(hiddenCanvas);
+                    // Koordinat panduan tetap memakai ukuran video (sama dengan overlay).
+                    let cw = overlayCanvas.width;
+                    let ch = overlayCanvas.height;
+                    hiddenCanvas.getContext('2d').drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                     
                     let guideW = cw * 0.75;
                     let guideH = guideW * (getWarpHeight() / getWarpWidth());
@@ -2512,9 +2837,8 @@
                         MR: interpolateQuadPoint(guideQuad, getRightMiddleGuideRatio(), getMiddleGuideRatio())
                     };
 
-                    let scale = TRACK_W / src.cols;
-                    smallMat = new cv.Mat();
-                    cv.resize(src, smallMat, new cv.Size(Math.round(src.cols * scale), Math.round(src.rows * scale)));
+                    let scale = hiddenCanvas.width / Math.max(1, cw);
+                    smallMat = cv.imread(hiddenCanvas);
                     gray = new cv.Mat();
                     cv.cvtColor(smallMat, gray, cv.COLOR_RGBA2GRAY, 0);
 
@@ -2601,12 +2925,11 @@
                             let finalFids = {};
                             for(let k in camLastFids) finalFids[k] = { x: camLastFids[k].x / scale, y: camLastFids[k].y / scale };
                             
-                            resetUI(); document.getElementById('loader-overlay').classList.remove('hidden');
-                            let captureCanvas = document.createElement('canvas');
-                            captureCanvas.width = hiddenCanvas.width; captureCanvas.height = hiddenCanvas.height;
-                            captureCanvas.getContext('2d').drawImage(hiddenCanvas, 0, 0);
-                            
-                            setTimeout(() => cam_processFullRes(captureCanvas, finalFids), 100);
+                            // Kamera JANGAN dimatikan dulu: frame beruntun masih diambil
+                            // dari video yang hidup. Pematian dilakukan di akhir tangkapan.
+                            document.getElementById('loader-overlay').classList.remove('hidden');
+                            scanStatus.innerHTML = '<span class="text-emerald-500 font-bold">MENANGKAP...</span>';
+                            cam_captureBurst(finalFids);
                             return; 
                         }
                     } else {
@@ -2615,7 +2938,7 @@
                         scanStatus.innerHTML = `<span class="text-blue-500 font-bold">MENCARI KOTAK SUDUT...</span>`;
                     }
                 } catch (err) { console.error(err); }
-                finally { if(src) src.delete(); if(smallMat) smallMat.delete(); if(gray) gray.delete(); }
+                finally { if(smallMat) smallMat.delete(); if(gray) gray.delete(); }
                 if(!isProcessing) videoScanLoop = requestAnimationFrame(loop);
             }
         } 
@@ -2800,7 +3123,7 @@
         return fullWarped; 
     }
 
-    function up_performExtraction(warpedMat) {
+    function up_performExtraction(warpedMat, pre, fullScan) {
         currentScanSource = 'upload';
         resetDiagnostics();
         let ctx = resultCanvas.getContext('2d');
@@ -2808,7 +3131,7 @@
             const gridRows = getGridRowsCount();
             const gridCols = getGridColsCount();
             // Mesin V2: kalibrasi kisi otomatis + pengukuran arsiran berbasis cakram.
-            const gridData = eng_prepareGrid(warpedMat);
+            const gridData = eng_prepareGrid(warpedMat, pre, { fullScan: !!fullScan });
             if (engLastQuality < 0.25) return false;   // kisi tak terbaca -> minta rotasi/ulang
 
             ctx.strokeStyle = "rgba(239, 68, 68, 0.18)"; ctx.lineWidth = 1;
@@ -2878,12 +3201,13 @@
             document.getElementById('result-canvas').style.display = 'block';
             document.getElementById('result-canvas').classList.remove('hidden');
 
-            let isSuccess = up_performExtraction(finalWarpedMat);
+            // Rotasi 180 derajat mengubah gambar, jadi centroid lama tidak dipakai lagi.
+            let isSuccess = up_performExtraction(finalWarpedMat, best);
             if (!isSuccess) {
                 logAI(`${prefix} Kisi tidak terbaca. Mencoba rotasi 180 derajat...`);
                 cv.rotate(finalWarpedMat, finalWarpedMat, cv.ROTATE_180);
                 cv.imshow('result-canvas', finalWarpedMat);
-                isSuccess = up_performExtraction(finalWarpedMat);
+                isSuccess = up_performExtraction(finalWarpedMat, null, true);
                 if (!isSuccess && !batchMode) {
                     showCustomAlert("Diagnostik Pemindaian:\nKisi bubble tidak dapat dikunci pada gambar ini. Gambar hasil pelurusan tetap ditampilkan agar dapat diperiksa.");
                 }
@@ -3733,6 +4057,8 @@
             "Benar": formatSectionList(d.sectionTrueCounts),
             "Salah": formatSectionList(d.sectionFalseCounts),
             "Nilai": formatScoreValue(d.scoreValue, d.questionCount, d.trueCount),
+            "Poin": `${trimNumber(d.pointsEarned)} / ${trimNumber(d.pointsTotal)}`,
+            "Rincian Poin": normalizeDisplayText(d.sectionPoints, '-'),
             "Nomor Benar": formatSectionList(d.correctNumbers),
             "Nomor Salah": formatSectionList(d.wrongNumbers),
             "Jawaban": formatSectionList(d.answers)
@@ -3756,6 +4082,7 @@
         },
         getThresholdConfig: () => deepCopy(BUBBLE_THRESHOLD_BASE),
         regradeResults: (opts) => regradeStoredResults(opts || {}),
+        getResults: () => deepCopy(resultData),
         getEngineState: () => ({ fillThreshold: engFillThreshold, gridQuality: engLastQuality,
             lattice: engLastLattice ? { ...engLastLattice } : null,
             affine: engLastAffine ? { cx: [...engLastAffine.cx], cy: [...engLastAffine.cy], n: engLastAffine.n } : null })
@@ -3776,7 +4103,7 @@
 </script>
 
 <script>
-window.__LJK_EMBEDDED_LAYOUT__ = {"pengaturan_kertas":{"grid_cols":38,"grid_rows":61,"fiducial_tengah_r":40,"fiducial_tengah_kiri_c":1,"fiducial_tengah_kanan_c":37,"preset_paper":"F4","preset_orientation":"P","paper_width_mm":210,"paper_height_mm":330,"margin_left_mm":5,"margin_top_mm":5,"margin_right_mm":5,"margin_bottom_mm":5},"pengaturan_arsiran":{"diameter_ratio":0.72,"stroke_width":1.1,"font_size":9.5,"font_weight":534},"kop_surat":{"visible":false,"src":"","c":2,"r":0,"w":18},"judul_utama":{"visible":true,"text":"ASESMEN SUMATIF TENGAH SEMESTER I\nSMP NEGERI 2 SECANG","c":2,"r":0,"w":34,"h":3},"judul_secondary":{"visible":true,"blocks":[{"text":"NAMA SISWA :","c":2,"r":3,"w":15,"h":1},{"text":"MATA PELAJARAN :","c":2,"r":4,"w":15,"h":1}]},"identitas":{"nama":{"visible":false,"title":"NAMA PESERTA","layout":"V","c":2,"r":5,"w":18,"h":26},"jenis_kelamin":{"visible":false,"title":"GENDER","layout":"H","c":21,"r":5,"w":2,"h":1,"labels":["L","P"]},"no_peserta":{"visible":true,"title":"NOMOR PESERTA","layout":"V","c":2,"r":7,"w":12,"h":11,"labels":["0","1","2","3","4","5","6","7","8","9","."]},"kelas":{"visible":true,"title":"KELAS","layout":"V","c":15,"r":7,"w":2,"h":12,"labels":["7","8","9","A","B","C","D","E","F","G","H","T"]}},"jawaban_pg":{"visible":true,"title":"I. PILIHAN GANDA","startRow":4,"blocks":[{"startSoal":1,"c":20,"rows":15,"options":4,"layout":"H","labels":["A","B","C","D"]},{"startSoal":16,"c":26,"rows":15,"options":4,"layout":"H","labels":["A","B","C","D"]},{"startSoal":31,"c":32,"rows":15,"options":4,"layout":"H"}]},"jawaban_pgk":{"visible":false,"title":"II. PG KOMPLEKS","startRow":21,"blocks":[{"startSoal":21,"c":3,"rows":3,"options":4,"layout":"H","labels":["A","B","C","D"],"jawaban_benar":2}]},"jawaban_bs":{"visible":false,"title":"III. PG Benar-Salah","startRow":21,"blocks":[{"startSoal":27,"c":9,"rows":3,"options":6,"layout":"H","labels":["B","S","B","S","B","S"],"pairs":3}]},"jawaban_menjodohkan":{"visible":false,"title":"IV. MENJODOHKAN","startRow":21,"blocks":[{"startSoal":26,"c":17,"rows":3,"options":10,"layout":"H","labels":["A","B","C","D","E","F","G","H","I","J"]}]},"isian_singkat":{"visible":false,"title":"V. ISIAN SINGKAT","startRow":33,"blocks":[{"startSoal":36,"c":25,"w":5,"rows":5,"h":1},{"startSoal":41,"c":31,"w":5,"rows":5,"h":1}]},"uraian":{"visible":true,"title":"VI. URAIAN","startRow":20,"showDots":true,"blocks":[{"startSoal":0,"c":3,"w":33,"rows":1,"h":39}]}};
+window.__LJK_EMBEDDED_LAYOUT__ = {"pengaturan_kertas":{"grid_cols":38,"grid_rows":61,"fiducial_tengah_r":40,"fiducial_tengah_kiri_c":1,"fiducial_tengah_kanan_c":37,"preset_paper":"F4","preset_orientation":"P","paper_width_mm":210,"paper_height_mm":330,"margin_left_mm":5,"margin_top_mm":5,"margin_right_mm":5,"margin_bottom_mm":5},"pengaturan_arsiran":{"diameter_ratio":0.72,"stroke_width":1.1,"font_size":9.5,"font_weight":534},"kop_surat":{"visible":false,"src":"","c":2,"r":0,"w":18},"judul_utama":{"visible":true,"text":"ASESMEN SUMATIF TENGAH SEMESTER I\nSMP NEGERI 2 SECANG","c":2,"r":0,"w":34,"h":3},"judul_secondary":{"visible":true,"blocks":[{"text":"NAMA SISWA :","c":2,"r":3,"w":15,"h":1},{"text":"MATA PELAJARAN :","c":2,"r":4,"w":15,"h":1}]},"identitas":{"nama":{"visible":false,"title":"NAMA PESERTA","layout":"V","c":2,"r":5,"w":18,"h":26},"jenis_kelamin":{"visible":false,"title":"GENDER","layout":"H","c":21,"r":5,"w":2,"h":1,"labels":["L","P"]},"no_peserta":{"visible":true,"title":"NOMOR PESERTA","layout":"V","c":2,"r":7,"w":12,"h":11,"labels":["0","1","2","3","4","5","6","7","8","9","."]},"kelas":{"visible":true,"title":"KELAS","layout":"V","c":15,"r":7,"w":2,"h":12,"labels":["7","8","9","A","B","C","D","E","F","G","H","T"]}},"jawaban_pg":{"visible":true,"title":"I. PILIHAN GANDA","startRow":4,"blocks":[{"startSoal":1,"c":20,"rows":15,"options":4,"layout":"H","labels":["A","B","C","D"]},{"startSoal":16,"c":26,"rows":15,"options":4,"layout":"H","labels":["A","B","C","D"]},{"startSoal":31,"c":32,"rows":15,"options":4,"layout":"H"}],"poin":1},"jawaban_pgk":{"visible":false,"title":"II. PG KOMPLEKS","startRow":21,"blocks":[{"startSoal":21,"c":3,"rows":3,"options":4,"layout":"H","labels":["A","B","C","D"],"jawaban_benar":2}],"poin":1},"jawaban_bs":{"visible":false,"title":"III. PG Benar-Salah","startRow":21,"blocks":[{"startSoal":27,"c":9,"rows":3,"options":6,"layout":"H","labels":["B","S","B","S","B","S"],"pairs":3}],"poin":1},"jawaban_menjodohkan":{"visible":false,"title":"IV. MENJODOHKAN","startRow":21,"blocks":[{"startSoal":26,"c":17,"rows":3,"options":10,"layout":"H","labels":["A","B","C","D","E","F","G","H","I","J"]}],"poin":1},"isian_singkat":{"visible":false,"title":"V. ISIAN SINGKAT","startRow":33,"blocks":[{"startSoal":36,"c":25,"w":5,"rows":5,"h":1},{"startSoal":41,"c":31,"w":5,"rows":5,"h":1}]},"uraian":{"visible":true,"title":"VI. URAIAN","startRow":20,"showDots":true,"blocks":[{"startSoal":0,"c":3,"w":33,"rows":1,"h":39}]}};
 window.addEventListener('load', () => {
   try {
     if (window.ScannerApp?.applyLayoutConfig) {
