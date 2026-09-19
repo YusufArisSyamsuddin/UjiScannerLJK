@@ -496,52 +496,6 @@
     function getMiddleGuideRatio() { return clampFloatValue((paperConfig.fiducialMiddleRow + 1) / Math.max(1, paperConfig.gridRows), 0.67, 0.1, 0.95); }
     function getLeftMiddleGuideRatio() { return clampFloatValue(paperConfig.fiducialMiddleLeftCol / Math.max(1, paperConfig.gridCols), 0.03, 0.01, 0.4); }
     function getRightMiddleGuideRatio() { return clampFloatValue(paperConfig.fiducialMiddleRightCol / Math.max(1, paperConfig.gridCols), 0.97, 0.6, 0.99); }
-    function getBubbleSamplingScale() {
-        return clampFloatValue(
-            0.43 + ((bubbleConfig.diameterRatio - 0.72) * 0.18) - (Math.max(0, bubbleConfig.fontSize - 10) * 0.006) - (bubbleConfig.fontWeight >= 600 ? 0.008 : 0),
-            0.43,
-            0.38,
-            0.5
-        );
-    }
-    function getBubbleMarkedFillRatio() {
-        const base = BUBBLE_THRESHOLD_BASE.markedFillRatio;
-        return clampFloatValue(
-            base + Math.max(0, bubbleConfig.diameterRatio - 0.75) * 0.06 + Math.max(0, bubbleConfig.fontSize - 10) * 0.003 + (bubbleConfig.fontWeight >= 600 ? 0.008 : 0),
-            base,
-            0.16,
-            0.26
-        );
-    }
-    function getBubbleSignalRatio() {
-        const base = BUBBLE_THRESHOLD_BASE.signalRatio;
-        return clampFloatValue(base + (bubbleConfig.fontWeight >= 600 ? 0.06 : 0), base, 2.60, 3.45);
-    }
-    function getBubbleCenterSamplingScale() {
-        return clampFloatValue(getBubbleSamplingScale() * 0.64, 0.28, 0.24, 0.38);
-    }
-    function getBubbleCenterFillRatio() {
-        const base = BUBBLE_THRESHOLD_BASE.centerFillRatio;
-        return clampFloatValue(
-            base + Math.max(0, bubbleConfig.diameterRatio - 0.75) * 0.05 + Math.max(0, bubbleConfig.fontSize - 10) * 0.003,
-            base,
-            0.18,
-            0.29
-        );
-    }
-    function getBubbleCombinedFillRatio() {
-        const base = BUBBLE_THRESHOLD_BASE.combinedFillRatio;
-        return clampFloatValue(
-            base + Math.max(0, bubbleConfig.diameterRatio - 0.75) * 0.06 + Math.max(0, bubbleConfig.fontSize - 10) * 0.003,
-            base,
-            0.165,
-            0.26
-        );
-    }
-    function getBubbleSoftGapRatio() {
-        const base = BUBBLE_THRESHOLD_BASE.softGapRatio;
-        return clampFloatValue(base + (bubbleConfig.fontWeight >= 600 ? 0.004 : 0), base, 0.031, 0.063);
-    }
     function interpolateQuadPoint(quad, u, v) {
         const top = { x: quad.TL.x + ((quad.TR.x - quad.TL.x) * u), y: quad.TL.y + ((quad.TR.y - quad.TL.y) * u) };
         const bottom = { x: quad.BL.x + ((quad.BR.x - quad.BL.x) * u), y: quad.BL.y + ((quad.BR.y - quad.BL.y) * u) };
@@ -1050,8 +1004,6 @@
             falseCount,
             emptyCount,
             questionCount,
-            raguCount: Math.max(0, Number(row.raguCount ?? row.ragu) || 0),
-            soalCount: Math.max(0, Number(row.soalCount ?? row.soal) || 0),
             pointsEarned: Number.isFinite(Number(row.pointsEarned)) ? Number(row.pointsEarned) : trueCount,
             pointsTotal: Number.isFinite(Number(row.pointsTotal)) ? Number(row.pointsTotal) : questionCount,
             sectionPoints: normalizeDisplayText(row.sectionPoints, '-'),
@@ -1125,7 +1077,10 @@
         SECTION_MATCH_MIN: 0.55,
         // Kecocokan blok jawaban yang sudah cukup meyakinkan untuk berhenti
         // mencoba frame lain. Di atas angka ini kisi terbukti terpasang tepat.
-        CAM_GOOD_MATCH: 0.90,  // di bawah ini, blok dianggap tidak ada di kertas
+        CAM_GOOD_MATCH: 0.90,
+        // Jari-jari penghalusan titik petunjuk, relatif terhadap tinggi lembar.
+        // Diuji tahan sampai galat petunjuk +/- 30 px pada frame 1920 px.
+        HINT_RADIUS: 0.030,  // di bawah ini, blok dianggap tidak ada di kertas
         MAX_HYPOTHESES: 8,
         SCORE_SCALE: 0.5,         // skala warp saat menilai hipotesis (ringan)
         CONF_GOOD: 0.88,          // berhenti lebih awal bila sudah sangat baik
@@ -1932,6 +1887,47 @@
         return best;
     }
 
+    // Deteksi CEPAT untuk Live Scan. Pelacak langsung BARU SAJA mengunci keenam
+    // kotak pada frame ini, jadi tidak ada gunanya mencarinya lagi dari nol:
+    // keenam titik itu cukup dihaluskan pada resolusi penuh. Seluruh tahap
+    // pencarian kandidat - lima kali binarisasi, penelusuran kontur, pembentukan
+    // hipotesis - bisa dilewati. Hasilnya TETAP diverifikasi lewat kecocokan blok
+    // jawaban; bila meleset, jalur deteksi penuh tetap dijalankan seperti biasa.
+    function eng_detectDariPetunjuk(src, hint) {
+        const KEYS = ['TL', 'TR', 'ML', 'MR', 'BL', 'BR'];
+        if (!hint) return null;
+        for (const k of KEYS) {
+            if (!hint[k] || !Number.isFinite(hint[k].x) || !Number.isFinite(hint[k].y)) return null;
+        }
+        const grayFull = new cv.Mat();
+        cv.cvtColor(src, grayFull, cv.COLOR_RGBA2GRAY, 0);
+        const span = Math.hypot(hint.BL.x - hint.TL.x, hint.BL.y - hint.TL.y);
+        const rad = Math.max(12, span * ENG.HINT_RADIUS);
+        const fid = {};
+        let ketemu = 0;
+        KEYS.forEach(k => {
+            const r = eng_refinePoint(grayFull, hint[k].x, hint[k].y, rad);
+            if (r) { fid[k] = [r.x, r.y]; ketemu++; }
+            else fid[k] = [hint[k].x, hint[k].y];
+        });
+        grayFull.delete();
+        if (ketemu < 5) return null;        // petunjuknya sudah tidak bisa dipercaya
+        let warped = null, pts = null, lat = null;
+        try {
+            warped = eng_dualWarp(src, fid);
+            pts = eng_bubbleCentroidsDesign(warped, GRID_SIZE);
+            lat = eng_fitLatticeFromPts(pts, GRID_SIZE);
+        } catch (err) {
+            if (warped) { warped.delete(); warped = null; }
+            lat = null;
+        }
+        if (!warped || !lat) {
+            if (warped) warped.delete();
+            return null;
+        }
+        return { conf: lat.conf, fid: fid, lat: lat, pts: pts, warped: warped, mode: 'petunjuk-pelacak' };
+    }
+
     // Dua tahap. Tahap pertama persis seperti sebelumnya, jadi gambar yang selama
     // ini berhasil sama sekali tidak berubah. Tahap kedua hanya berjalan ketika
     // tahap pertama benar-benar gagal, sehingga tidak ada biaya tambahan pada
@@ -2304,20 +2300,6 @@
         return result.join('').trim() || '-';
     }
 
-    function shared_probeIdentityDensity(grid) {
-        const cfg = activeLayoutConfig?.identitas?.nama;
-        if (!cfg || cfg.visible === false) return 100;
-        let density = 0;
-        const maxCols = Math.min(Number(cfg.w) || 0, 4);
-        const maxRows = Math.min(Number(cfg.h) || 0, 4);
-        for (let c = 0; c < maxCols; c++) {
-            for (let r = 0; r < maxRows; r++) {
-                density += shared_getGridCell(grid, designerToGridRow(Number(cfg.r) + r), designerToGridCol(Number(cfg.c) + c)).density;
-            }
-        }
-        return density;
-    }
-
     // Deteksi arsiran untuk SELURUH nomor soal, termasuk nomor yang belum punya
     // kunci. Hasil mentah inilah yang disimpan bersama rekap, sehingga kunci dapat
     // diubah kapan saja tanpa perlu memindai ulang lembar jawaban.
@@ -2678,8 +2660,13 @@
     // Membaca satu lembar hasil warp TANPA menyimpannya ke rekap. Dipisah dari
     // penyimpanan supaya beberapa frame bisa dibandingkan dulu, lalu hanya yang
     // terbaik yang masuk ke tabel.
-    function cam_readSheet(warpedMat, pre, fullScan) {
-        currentScanSource = 'camera';
+    // Membaca satu lembar hasil pelurusan TANPA menyimpannya ke rekap.
+    // Dipakai oleh Live Scan Kamera maupun Unggah Gambar/PDF, supaya keduanya
+    // tidak mungkin berbeda perilaku.
+    //   pre      : centroid+kisi dari tahap deteksi (boleh null, akan dihitung)
+    //   fullScan : true bila citra TIDAK lagi sejajar desain (mis. sudah diputar)
+    function shared_readSheet(warpedMat, pre, fullScan, source) {
+        currentScanSource = source || 'upload';
         resetDiagnostics();
         const ctx = resultCanvas.getContext('2d');
         const gridRows = getGridRowsCount();
@@ -2698,9 +2685,10 @@
             }
         }
 
-        const name = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.nama, ALPHABET, ctx, 'nama');
-        const kelas = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.kelas, KELAS_VALS, ctx, 'kelas');
-        const peserta = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.no_peserta, NUMBERS, ctx, 'no_peserta');
+        const idn = activeLayoutConfig.identitas || {};
+        const name = shared_extractIdentity(gridData, idn.nama, ALPHABET, ctx, 'nama');
+        const kelas = shared_extractIdentity(gridData, idn.kelas, KELAS_VALS, ctx, 'kelas');
+        const peserta = shared_extractIdentity(gridData, idn.no_peserta, NUMBERS, ctx, 'no_peserta');
         const keyInfo = collectAnswerKeysForVisibleSections();
         const scoreData = shared_gradeAnswers(gridData, ctx, keyInfo.keys);
         const ring = cam_ringkasBacaan(scoreData.detections);
@@ -2712,6 +2700,32 @@
             threshold: engFillThreshold,
             ragu: ring.ragu, soal: ring.soal, tegas: ring.tegas
         };
+    }
+
+    // Menyimpan hasil pembacaan ke rekap. Juga dipakai kedua mode.
+    function shared_commitReading(reading, warpedMat, prefix) {
+        eng_reportLayoutMatch(prefix);
+        logDiagnosticsSummary(prefix);
+        const { name, kelas, peserta, scoreData } = reading;
+        const existingIndex = resultData.findIndex(d => d.peserta === peserta && d.kelas === kelas && peserta !== "-");
+        const dataRow = normalizeStoredResultRow({ name, kelas, peserta, ...scoreData });
+        if (existingIndex !== -1) {
+            dataRow.recordId = resultData[existingIndex].recordId;
+            dataRow.id = resultData[existingIndex].id;
+            attachReviewShot(dataRow, warpedMat);
+            if (batchImportActive) {
+                resultData[existingIndex] = dataRow;
+            } else {
+                showPopupResult(dataRow, true, existingIndex);
+            }
+        } else {
+            dataRow.recordId = createRecordId();
+            dataRow.id = String(scanCounter++);
+            attachReviewShot(dataRow, warpedMat);
+            resultData.push(dataRow);
+            if (!batchImportActive) showPopupResult(dataRow, false);
+        }
+        updateTable();
     }
 
     // Berapa banyak jawaban yang TIDAK tegas terbaca ('-' kosong atau '*' ganda).
@@ -2751,34 +2765,6 @@
     // itu urusan siswa, bukan urusan pemindai.
     function cam_bacaanCukup(b) {
         return !!b && b.soal > 0 && b.cocokJawab >= ENG.CAM_GOOD_MATCH;
-    }
-
-    function cam_commitReading(reading, warpedMat) {
-        eng_reportLayoutMatch('[KAMERA]');
-        logDiagnosticsSummary('[KAMERA]');
-        const { name, kelas, peserta, scoreData } = reading;
-        const existingIndex = resultData.findIndex(d => d.peserta === peserta && d.kelas === kelas && peserta !== "-");
-        const dataRow = normalizeStoredResultRow({
-            name, kelas, peserta, ...scoreData,
-            raguCount: reading.ragu, soalCount: reading.soal
-        });
-        if (existingIndex !== -1) {
-            dataRow.recordId = resultData[existingIndex].recordId;
-            dataRow.id = resultData[existingIndex].id;
-            attachReviewShot(dataRow, warpedMat);
-            if (batchImportActive) {
-                resultData[existingIndex] = dataRow;
-            } else {
-                showPopupResult(dataRow, true, existingIndex);
-            }
-        } else {
-            dataRow.recordId = createRecordId();
-            dataRow.id = String(scanCounter++);
-            attachReviewShot(dataRow, warpedMat);
-            resultData.push(dataRow);
-            if (!batchImportActive) showPopupResult(dataRow, false);
-        }
-        updateTable();
     }
 
     // Ketajaman frame = varian Laplacian. Dihitung pada salinan kecil supaya
@@ -2838,10 +2824,32 @@
 
     // Satu percobaan pembacaan dari satu frame. Mengembalikan hasil baca + warp-nya,
     // atau null bila frame itu memang tidak bisa dibaca.
+    function cam_tampilkanWarp(warped) {
+        resultCanvas.width = warped.cols;
+        resultCanvas.height = warped.rows;
+        cv.imshow('result-canvas', warped);
+        resultCanvas.style.display = 'block';
+        resultCanvas.classList.remove('hidden');
+    }
+
     function cam_tryShot(shot, fids, label, allowFallback) {
         let src = null, warped = null, pre = null;
         try {
             src = cv.imread(shot.canvas);
+
+            // --- Jalur petunjuk: pakai kunci dari pelacak langsung ---
+            const cepat = eng_detectDariPetunjuk(src, fids);
+            if (cepat && cepat.warped) {
+                cam_tampilkanWarp(cepat.warped);
+                const bacaanCepat = shared_readSheet(cepat.warped, cepat, false, 'camera');
+                if (bacaanCepat && bacaanCepat.cocokJawab >= ENG.CAM_GOOD_MATCH) {
+                    logAI(`${label} Keenam kotak dipakai langsung dari pelacak - tahap pencarian kandidat dilewati.`);
+                    return { reading: bacaanCepat, warped: cepat.warped, diputar: false };
+                }
+                cepat.warped.delete();
+            }
+
+            // --- Jalur penuh: cari keenam kotak dari nol ---
             const best = eng_detectAndWarp(src, label);
             if (best && best.warped && best.conf >= 0.35) {
                 warped = best.warped; pre = best;
@@ -2852,26 +2860,22 @@
                 warped = cam_performDualWarp(src, fids);
                 pre = null;
             }
-            resultCanvas.width = warped.cols;
-            resultCanvas.height = warped.rows;
-            cv.imshow('result-canvas', warped);
-            resultCanvas.style.display = 'block';
-            resultCanvas.classList.remove('hidden');
+            cam_tampilkanWarp(warped);
 
-            let reading = cam_readSheet(warped, pre, false);
+            let reading = shared_readSheet(warped, pre, false, 'camera');
             let diputar = false;
             if (eng_perluCoba180(reading)) {
                 logAI(`${label} ${reading ? 'Desain belum cocok dengan lembar' : 'Kisi tidak terbaca'}. Mencoba rotasi 180 derajat...`);
                 cv.rotate(warped, warped, cv.ROTATE_180);
                 cv.imshow('result-canvas', warped);
-                const r180 = cam_readSheet(warped, null, true);
+                const r180 = shared_readSheet(warped, null, true, 'camera');
                 if (eng_pilih180(reading, r180)) {
                     reading = r180; diputar = true;
                 } else {
                     // Putaran tidak memperbaiki apa pun - kembalikan seperti semula.
                     cv.rotate(warped, warped, cv.ROTATE_180);
                     cv.imshow('result-canvas', warped);
-                    if (reading) reading = cam_readSheet(warped, null, false) || reading;
+                    if (reading) reading = shared_readSheet(warped, null, false, 'camera') || reading;
                 }
             }
             if (!reading) { warped.delete(); return null; }
@@ -2920,12 +2924,10 @@
             // Bila pemenangnya bukan frame yang terakhir digambar, gambar ulang
             // supaya penanda di layar benar-benar milik hasil yang disimpan.
             if (!tampilMilikPemenang) {
-                resultCanvas.width = best.warped.cols;
-                resultCanvas.height = best.warped.rows;
-                cv.imshow('result-canvas', best.warped);
-                cam_readSheet(best.warped, null, !!best.diputar);
+                cam_tampilkanWarp(best.warped);
+                shared_readSheet(best.warped, null, !!best.diputar, 'camera');
             }
-            cam_commitReading(best.reading, best.warped);
+            shared_commitReading(best.reading, best.warped, '[KAMERA]');
             logAI(`[KAMERA] Selesai. ${best.reading.tegas}/${best.reading.soal} jawaban terbaca tegas, `
                 + `kecocokan blok jawaban ${(best.reading.cocokJawab * 100).toFixed(0)}%, mutu kisi ${(best.reading.quality * 100).toFixed(0)}%, `
                 + `ambang arsiran ${best.reading.threshold.toFixed(2)}`
@@ -3197,251 +3199,9 @@
         loop(0);
     }
 
-    function up_detectPaperRegion(src) {
-        let procMat = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat();
-        let scaleRatio = 1000.0 / src.cols;
-        let bestPts = null;
-        let maxArea = 0;
-
-        try {
-            cv.resize(src, procMat, new cv.Size(1000, Math.round(src.rows * scaleRatio)));
-            cv.cvtColor(procMat, gray, cv.COLOR_RGBA2GRAY, 0);
-
-            let clahe = new cv.CLAHE(3.0, new cv.Size(8, 8));
-            clahe.apply(gray, gray);
-            clahe.delete();
-
-            cv.GaussianBlur(gray, blur, new cv.Size(7, 7), 0);
-
-            let strategies = [
-                () => { let e = new cv.Mat(); cv.Canny(blur, e, 30, 100); return e; },
-                () => { let e = new cv.Mat(); cv.Canny(blur, e, 15, 50); return e; },
-                () => {
-                    let grad = new cv.Mat();
-                    let k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-                    cv.morphologyEx(gray, grad, cv.MORPH_GRADIENT, k);
-                    cv.threshold(grad, grad, 0, 255, cv.THRESH_BINARY | cv.THRESH_OTSU);
-                    k.delete();
-                    return grad;
-                },
-                () => {
-                    let adp = new cv.Mat();
-                    cv.adaptiveThreshold(blur, adp, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 11, 2);
-                    return adp;
-                }
-            ];
-
-            for (let i = 0; i < strategies.length; i++) {
-                let edges = strategies[i]();
-                let contours = new cv.MatVector(), hierarchy = new cv.Mat();
-                cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-                for (let j = 0; j < contours.size(); j++) {
-                    let cnt = contours.get(j);
-                    let area = cv.contourArea(cnt);
-                    if (area > maxArea && area > (procMat.cols * procMat.rows * 0.15)) {
-                        let approx = new cv.Mat();
-                        cv.approxPolyDP(cnt, approx, 0.02 * cv.arcLength(cnt, true), true);
-                        if (approx.rows === 4 && cv.isContourConvex(approx)) {
-                            maxArea = area;
-                            let pts = [];
-                            for (let k = 0; k < 4; k++) pts.push({ x: approx.data32S[k * 2], y: approx.data32S[k * 2 + 1] });
-                            let ordered = shared_orderPoints(pts);
-                            bestPts = ordered.map(p => ({ x: p.x / scaleRatio, y: p.y / scaleRatio }));
-                        }
-                        approx.delete();
-                    }
-                }
-                contours.delete(); hierarchy.delete(); edges.delete();
-                if (bestPts) break;
-            }
-        } finally {
-            procMat.delete(); gray.delete(); blur.delete();
-        }
-        return bestPts;
-    }
-
-    function up_extractFiducialsFromROI(src, roiRect, offsetX) {
-        let roi = src.roi(roiRect);
-        let gray = new cv.Mat(), thresh = new cv.Mat();
-        let pts = [];
-        try {
-            cv.cvtColor(roi, gray, cv.COLOR_RGBA2GRAY, 0);
-            cv.GaussianBlur(gray, gray, new cv.Size(3, 3), 0);
-            cv.adaptiveThreshold(gray, thresh, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, 25, 10);
-            let k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-            cv.morphologyEx(thresh, thresh, cv.MORPH_CLOSE, k); k.delete();
-
-            let contours = new cv.MatVector(), hierarchy = new cv.Mat();
-            cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-            for (let i = 0; i < contours.size(); i++) {
-                let c = contours.get(i);
-                let rect = cv.boundingRect(c);
-                let area = cv.contourArea(c);
-                let aspect = rect.width / rect.height;
-                let extent = area / (rect.width * rect.height);
-
-                if (area > 50 && area < 5000 && aspect > 0.6 && aspect < 1.4 && extent > 0.5) {
-                    let m = cv.moments(c);
-                    if (m.m00 !== 0) {
-                        pts.push({ x: offsetX + (m.m10 / m.m00), y: roiRect.y + (m.m01 / m.m00) });
-                    }
-                }
-            }
-            contours.delete(); hierarchy.delete();
-        } finally {
-            roi.delete(); gray.delete(); thresh.delete();
-        }
-        return pts;
-    }
-
-    function up_find6FiducialsWithFallback(flatMat) {
-        let w = flatMat.cols, h = flatMat.rows;
-        let marginX = Math.round(w * 0.13);
-
-        let leftRoi = new cv.Rect(0, 0, marginX, h);
-        let rightRoi = new cv.Rect(w - marginX, 0, marginX, h);
-
-        let leftPts = up_extractFiducialsFromROI(flatMat, leftRoi, 0);
-        let rightPts = up_extractFiducialsFromROI(flatMat, rightRoi, w - marginX);
-
-        let filterBest3 = (pts) => {
-            if (pts.length < 3) return null;
-            if (pts.length === 3) return pts.sort((a, b) => a.y - b.y);
-
-            let bestCombo = null;
-            let minVar = Infinity;
-
-            for (let i = 0; i < pts.length - 2; i++) {
-                for (let j = i + 1; j < pts.length - 1; j++) {
-                    for (let k = j + 1; k < pts.length; k++) {
-                        let p1 = pts[i], p2 = pts[j], p3 = pts[k];
-                        let combo = [p1, p2, p3].sort((a, b) => a.y - b.y);
-
-                        let ySpan = combo[2].y - combo[0].y;
-                        if (ySpan < h * 0.6) continue;
-
-                        let avgX = (combo[0].x + combo[1].x + combo[2].x) / 3;
-                        let vX = Math.pow(combo[0].x - avgX, 2) + Math.pow(combo[1].x - avgX, 2) + Math.pow(combo[2].x - avgX, 2);
-
-                        if (vX < minVar) {
-                            minVar = vX;
-                            bestCombo = combo;
-                        }
-                    }
-                }
-            }
-            return bestCombo || pts.sort((a, b) => a.y - b.y).slice(0, 3);
-        };
-
-        let finalLeft = filterBest3(leftPts);
-        let finalRight = filterBest3(rightPts);
-
-        if (!finalLeft || !finalRight) return null;
-
-        return {
-            TL: finalLeft[0], ML: finalLeft[1], BL: finalLeft[2],
-            TR: finalRight[0], MR: finalRight[1], BR: finalRight[2]
-        };
-    }
-
-    function up_performDualWarp(src, fid) {
-        let fullWarped = new cv.Mat(getWarpHeight(), getWarpWidth(), cv.CV_8UC4, new cv.Scalar(255,255,255,255));
-
-        // PERBAIKAN: Rasio LJK fisik mutlak (Fiducial tengah persis di getMiddleGuideRatio())
-        let splitY = getSplitRows() * GRID_SIZE;
-        let botHeight = getWarpHeight() - splitY;
-
-        let srcTop = cv.matFromArray(4, 1, cv.CV_32FC2, [fid.TL.x, fid.TL.y, fid.TR.x, fid.TR.y, fid.MR.x, fid.MR.y, fid.ML.x, fid.ML.y]);
-        let dstTop = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, getWarpWidth(), 0, getWarpWidth(), splitY, 0, splitY]);
-        let M_Top = cv.getPerspectiveTransform(srcTop, dstTop);
-        let warpTop = new cv.Mat();
-        cv.warpPerspective(src, warpTop, M_Top, new cv.Size(getWarpWidth(), splitY));
-
-        let srcBot = cv.matFromArray(4, 1, cv.CV_32FC2, [fid.ML.x, fid.ML.y, fid.MR.x, fid.MR.y, fid.BR.x, fid.BR.y, fid.BL.x, fid.BL.y]);
-        let dstBot = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, getWarpWidth(), 0, getWarpWidth(), botHeight, 0, botHeight]);
-        let M_Bot = cv.getPerspectiveTransform(srcBot, dstBot);
-        let warpBot = new cv.Mat();
-        cv.warpPerspective(src, warpBot, M_Bot, new cv.Size(getWarpWidth(), botHeight));
-
-        let roiTop = fullWarped.roi(new cv.Rect(0, 0, getWarpWidth(), splitY));
-        warpTop.copyTo(roiTop);
-        let roiBot = fullWarped.roi(new cv.Rect(0, splitY, getWarpWidth(), botHeight));
-        warpBot.copyTo(roiBot);
-
-        srcTop.delete(); dstTop.delete(); M_Top.delete(); warpTop.delete(); roiTop.delete();
-        srcBot.delete(); dstBot.delete(); M_Bot.delete(); warpBot.delete(); roiBot.delete();
-        return fullWarped;
-    }
-
     // Membaca lembar TANPA menyimpan ke rekap, sama seperti jalur kamera. Dengan
     // pemisahan ini, orientasi 0 vs 180 derajat bisa dibandingkan dulu, lalu hanya
     // yang benar-benar cocok dengan desain yang masuk ke tabel.
-    function up_readSheet(warpedMat, pre, fullScan) {
-        currentScanSource = 'upload';
-        resetDiagnostics();
-        const ctx = resultCanvas.getContext('2d');
-        const gridRows = getGridRowsCount();
-        const gridCols = getGridColsCount();
-        const gridData = eng_prepareGrid(warpedMat, pre, { fullScan: !!fullScan });
-        if (engLastQuality < 0.25) return null;   // kisi tak terbaca -> minta rotasi/ulang
-
-        ctx.strokeStyle = "rgba(239, 68, 68, 0.18)"; ctx.lineWidth = 1;
-        for (let r = 0; r < gridRows; r++) {
-            for (let c = 0; c < gridCols; c++) {
-                const cell = gridData[r][c];
-                if (!cell || !cell.centerArea) continue;
-                ctx.beginPath();
-                ctx.arc(cell.cx, cell.cy, 2, 0, 2 * Math.PI);
-                ctx.stroke();
-            }
-        }
-
-        const name = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.nama, ALPHABET, ctx, 'nama');
-        const kelas = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.kelas, KELAS_VALS, ctx, 'kelas');
-        const peserta = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.no_peserta, NUMBERS, ctx, 'no_peserta');
-        const keyInfo = collectAnswerKeysForVisibleSections();
-        const scoreData = shared_gradeAnswers(gridData, ctx, keyInfo.keys);
-        const ring = cam_ringkasBacaan(scoreData.detections);
-        return {
-            name, kelas, peserta, scoreData,
-            quality: engLastQuality,
-            cocok: engLayoutMatchBest,
-            cocokJawab: engAnswerMatchBest,
-            threshold: engFillThreshold,
-            ragu: ring.ragu, soal: ring.soal, tegas: ring.tegas
-        };
-    }
-
-    function up_commitReading(reading, warpedMat, prefix) {
-        eng_reportLayoutMatch(prefix);
-        logDiagnosticsSummary(prefix);
-        const { name, kelas, peserta, scoreData } = reading;
-        const existingIndex = resultData.findIndex(d => d.peserta === peserta && d.kelas === kelas && peserta !== "-");
-        const dataRow = normalizeStoredResultRow({
-            name, kelas, peserta, ...scoreData,
-            raguCount: reading.ragu, soalCount: reading.soal
-        });
-        if (existingIndex !== -1) {
-            dataRow.recordId = resultData[existingIndex].recordId;
-            dataRow.id = resultData[existingIndex].id;
-            attachReviewShot(dataRow, warpedMat);
-            if (batchImportActive) {
-                resultData[existingIndex] = dataRow;
-            } else {
-                showPopupResult(dataRow, true, existingIndex);
-            }
-        } else {
-            dataRow.recordId = createRecordId();
-            dataRow.id = String(scanCounter++);
-            attachReviewShot(dataRow, warpedMat);
-            resultData.push(dataRow);
-            if (!batchImportActive) showPopupResult(dataRow, false);
-        }
-        updateTable();
-    }
-
     function runUploadPipeline(canvas, options = {}) {
         let src = null, finalWarpedMat = null;
         const batchMode = !!options.batchMode;
@@ -3464,7 +3224,7 @@
             document.getElementById('result-canvas').style.display = 'block';
             document.getElementById('result-canvas').classList.remove('hidden');
 
-            let bacaan = up_readSheet(finalWarpedMat, best, false);
+            let bacaan = shared_readSheet(finalWarpedMat, best, false, 'upload');
             let diputar = false;
 
             // Pemutaran 180 derajat HANYA sah bila desain jadi lebih cocok dengan
@@ -3476,7 +3236,7 @@
                 logAI(`${prefix} ${bacaan ? 'Desain belum cocok dengan lembar' : 'Kisi tidak terbaca'}. Mencoba rotasi 180 derajat...`);
                 cv.rotate(finalWarpedMat, finalWarpedMat, cv.ROTATE_180);
                 cv.imshow('result-canvas', finalWarpedMat);
-                const bacaan180 = up_readSheet(finalWarpedMat, null, true);
+                const bacaan180 = shared_readSheet(finalWarpedMat, null, true, 'upload');
                 const lebihBaik = eng_pilih180(bacaan, bacaan180);
                 if (lebihBaik) {
                     bacaan = bacaan180;
@@ -3488,14 +3248,14 @@
                     cv.imshow('result-canvas', finalWarpedMat);
                     if (bacaan) {
                         logAI(`${prefix} Rotasi tidak memperbaiki kecocokan. Orientasi asli dipertahankan.`);
-                        bacaan = up_readSheet(finalWarpedMat, null, false) || bacaan;
+                        bacaan = shared_readSheet(finalWarpedMat, null, false, 'upload') || bacaan;
                     }
                 }
             }
 
             const isSuccess = !!bacaan;
             if (isSuccess) {
-                up_commitReading(bacaan, finalWarpedMat, prefix);
+                shared_commitReading(bacaan, finalWarpedMat, prefix);
                 logAI(`${prefix} Selesai. ${bacaan.tegas}/${bacaan.soal} jawaban terbaca tegas, `
                     + `kecocokan blok jawaban ${(bacaan.cocokJawab * 100).toFixed(0)}%, `
                     + `ambang arsiran ${bacaan.threshold.toFixed(2)}${diputar ? ', lembar diputar 180 derajat' : ''}.`);
@@ -4150,13 +3910,34 @@
         drawReview();
     }
 
+    // Jumlah kunci yang dinilai - (benar + salah). Selisihnya adalah nomor yang
+    // punya kunci tetapi arsirannya tidak terbaca aplikasi (kosong atau ganda).
+    // Berlaku sama untuk semua jenis soal dan semua mode pemindaian, karena
+    // ketiganya memakai gradeFromDetections() yang sama.
+    function jumlahTakTerbaca(row) {
+        if (!row) return 0;
+        const kunci = Math.max(0, Number(row.questionCount) || 0);
+        const benar = Math.max(0, Number(row.trueCount) || 0);
+        const salah = Math.max(0, Number(row.falseCount) || 0);
+        return Math.max(0, kunci - benar - salah);
+    }
+
     function updateTable() {
         let tbody = document.getElementById('result-table-body'); tbody.innerHTML = '';
         getSortedResultRows().forEach(d => {
             let tr = document.createElement('tr'); tr.className = "hover:bg-slate-50 border-b border-slate-100 text-xs transition-colors";
             tr.innerHTML = `
                 <td class="p-3 text-center whitespace-nowrap">
-                    ${(Number(d.raguCount) > 0) ? `<span class="inline-flex items-center justify-center w-5 h-5 mr-1 align-middle rounded-full bg-amber-100 text-amber-600 font-bold text-[10px]" title="${Number(d.raguCount)} jawaban tidak terbaca tegas - sebaiknya diperiksa lewat tombol mata">!</span>` : ''}
+                    ${(() => {
+                        // Penanda HANYA untuk nomor yang punya kunci tetapi tidak
+                        // menghasilkan benar maupun salah - artinya arsirannya memang
+                        // tidak terbaca aplikasi. Nomor tanpa kunci, dan blok yang
+                        // kuncinya belum diisi, tidak ikut dihitung.
+                        const belum = jumlahTakTerbaca(d);
+                        return belum > 0
+                            ? `<span class="inline-flex items-center justify-center w-5 h-5 mr-1 align-middle rounded-full bg-amber-100 text-amber-600 font-bold text-[10px]" title="${belum} nomor berkunci tidak menghasilkan benar maupun salah - arsirannya tidak terbaca. Buka tombol mata untuk memeriksa.">!</span>`
+                            : '';
+                    })()}
                     <button class="btn-review text-sky-600 hover:text-sky-800 bg-sky-50 hover:bg-sky-100 p-2 rounded-lg transition mr-1" title="Periksa &amp; koreksi jawaban" data-record-id="${escapeHtml(d.recordId)}">
                         <svg class="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                     </button>
@@ -4378,6 +4159,7 @@
         getThresholdConfig: () => deepCopy(BUBBLE_THRESHOLD_BASE),
         regradeResults: (opts) => regradeStoredResults(opts || {}),
         getResults: () => deepCopy(resultData),
+        takTerbaca: (row) => jumlahTakTerbaca(row),
         // dipakai oleh berkas uji untuk memeriksa keputusan orientasi
         _orientasi: { perluCoba180: eng_perluCoba180, pilih180: eng_pilih180 },
         _kamera: { gerbangTajam: cam_hitungGerbangTajam, paksaTangkapMs: CAM_FORCE_CAPTURE_MS,
