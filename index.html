@@ -1050,6 +1050,8 @@
             falseCount,
             emptyCount,
             questionCount,
+            raguCount: Math.max(0, Number(row.raguCount ?? row.ragu) || 0),
+            soalCount: Math.max(0, Number(row.soalCount ?? row.soal) || 0),
             pointsEarned: Number.isFinite(Number(row.pointsEarned)) ? Number(row.pointsEarned) : trueCount,
             pointsTotal: Number.isFinite(Number(row.pointsTotal)) ? Number(row.pointsTotal) : questionCount,
             sectionPoints: normalizeDisplayText(row.sectionPoints, '-'),
@@ -1126,6 +1128,13 @@
         CONF_GOOD: 0.88,          // berhenti lebih awal bila sudah sangat baik
         BG_BLUR_SCALE: 0.25,
         ROI_MIN_POINTS: 60,
+        // Batas kedua dipakai HANYA bila percobaan pertama gagal menemukan
+        // keenam kotak fiducial. Pada foto kamera kertas sering hanya mengisi
+        // sebagian bingkai, sehingga kotak fiducial menyusut sampai ~7 px dan
+        // lolos dari saringan bentuk. Deteksi ulang pada resolusi lebih tinggi
+        // mengembalikan ukurannya. Terbukti menyelamatkan 8 dari 8 kegagalan
+        // pada uji frame kamera, tanpa mengubah gambar yang sudah berhasil.
+        DETECT_MAX_DIM_RETRY: 2400,
         FAINT_FLOOR: 0.45,        // batas bawah mutlak untuk arsiran samar
         FAINT_DOMINANCE: 1.6,     // harus sekian kali lebih pekat dari saingan
         FAINT_RIVAL_MAX: 0.35     // saingan harus benar-benar bersih
@@ -1870,10 +1879,10 @@
     // dilewati - itu murni pekerjaan yang terbuang. Tahap penilaian tetap ada
     // sebagai cadangan ketika hasil hipotesis teratas meragukan, sehingga
     // ketahanan terhadap foto miring/gelap tidak berkurang sedikit pun.
-    function eng_detectAndWarp(src, logPrefix) {
+    function eng_detectSekali(src, logPrefix, maxDim) {
         const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
         const w = src.cols, h = src.rows;
-        const sc = Math.min(1, ENG.DETECT_MAX_DIM / Math.max(w, h));
+        const sc = Math.min(1, maxDim / Math.max(w, h));
         const small = new cv.Mat();
         cv.resize(src, small, new cv.Size(Math.max(1, Math.round(w * sc)), Math.max(1, Math.round(h * sc))));
         const graySmall = new cv.Mat();
@@ -1915,9 +1924,23 @@
         small.delete(); graySmall.delete();
         if (best && best.warped) {
             const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
-            logAI(`${logPrefix} Fiducial terkunci (${best.mode}) dari ${hyps.length} hipotesis dalam ${ms} ms (jalur ${jalur}), keteraturan kisi ${(best.conf * 100).toFixed(0)}%.`);
+            logAI(`${logPrefix} Fiducial terkunci (${best.mode}) dari ${hyps.length} hipotesis dalam ${ms} ms (jalur ${jalur}, deteksi ${Math.round(maxDim)} px), keteraturan kisi ${(best.conf * 100).toFixed(0)}%.`);
         }
         return best;
+    }
+
+    // Dua tahap. Tahap pertama persis seperti sebelumnya, jadi gambar yang selama
+    // ini berhasil sama sekali tidak berubah. Tahap kedua hanya berjalan ketika
+    // tahap pertama benar-benar gagal, sehingga tidak ada biaya tambahan pada
+    // pemindaian yang normal.
+    function eng_detectAndWarp(src, logPrefix) {
+        let best = eng_detectSekali(src, logPrefix, ENG.DETECT_MAX_DIM);
+        if (best && best.warped) return best;
+        const naik = Math.max(ENG.DETECT_MAX_DIM_RETRY, ENG.DETECT_MAX_DIM);
+        if (naik <= ENG.DETECT_MAX_DIM) return best;
+        logAI(`${logPrefix} Enam kotak fiducial belum ketemu. Mengulang dengan resolusi deteksi ${naik} px...`);
+        const lagi = eng_detectSekali(src, logPrefix, naik);
+        return (lagi && lagi.warped) ? lagi : best;
     }
 
     // Ekstraksi terpadu: dipakai oleh jalur kamera maupun unggah/PDF,
@@ -1929,7 +1952,9 @@
     // kemana-mana". Jadi setiap sel desain dicocokkan dulu dengan bubble tercetak.
     let engBubbleIndex = null;
     let engSectionMatch = {};
-    let engLayoutMatchBest = 0;
+    let engLayoutMatchBest = 0;     // kecocokan terbaik (blok apa pun) - untuk uji orientasi
+    let engAnswerMatchBest = 0;     // kecocokan terbaik khusus BLOK JAWABAN
+    let engAnyAnswerMatched = false;
 
     function eng_buildBubbleIndex(pts, lat) {
         const pitch = lat ? (lat.pitchX + lat.pitchY) / 2 : GRID_SIZE;
@@ -2006,18 +2031,30 @@
     // sini: lembar terbalik punya kisi yang sama teraturnya - itulah sebabnya dulu
     // hasil pemutaran bisa diterima walau lembarnya sebenarnya sudah tegak.
     const ENG_ORIENT_GAIN = 0.02;
+    function eng_nilaiCocok(bacaan) {
+        if (!bacaan) return 0;
+        // Blok jawaban yang menentukan; identitas hanya dipakai bila lembar ini
+        // memang tidak punya blok jawaban sama sekali.
+        const j = Number(bacaan.cocokJawab);
+        return Number.isFinite(j) && j > 0 ? j : Number(bacaan.cocok || 0);
+    }
     function eng_perluCoba180(bacaan) {
-        return !bacaan || Number(bacaan.cocok || 0) < ENG.SECTION_MATCH_MIN;
+        return !bacaan || eng_nilaiCocok(bacaan) < ENG.SECTION_MATCH_MIN;
     }
     function eng_pilih180(bacaan, bacaan180) {
         if (!bacaan180) return false;
         if (!bacaan) return true;
-        return Number(bacaan180.cocok || 0) > Number(bacaan.cocok || 0) + ENG_ORIENT_GAIN;
+        return eng_nilaiCocok(bacaan180) > eng_nilaiCocok(bacaan) + ENG_ORIENT_GAIN;
     }
 
     function eng_sectionPresent(id) {
         const rate = engSectionMatch[id];
-        return rate === undefined ? true : rate >= ENG.SECTION_MATCH_MIN;
+        if (rate === undefined) return true;
+        if (rate >= ENG.SECTION_MATCH_MIN) return true;
+        // Penyaring hanya berlaku bila ADA blok jawaban lain yang benar-benar cocok.
+        // Kalau tidak ada satupun yang cocok, semua blok tetap dibaca: lebih baik
+        // guru mendapat jawaban yang bisa dikoreksi daripada tabel kosong.
+        return !engAnyAnswerMatched;
     }
 
     // Hanya blok yang benar-benar tercetak di lembar yang ikut dinilai.
@@ -2033,16 +2070,26 @@
             logAI(`${prefix} Blok desain yang cocok dengan lembar: ${good.map(id => `${id} ${(engSectionMatch[id] * 100).toFixed(0)}%`).join(', ')}.`);
         }
         if (bad.length) {
-            logAI(`${prefix} DIABAIKAN - blok berikut tidak ditemukan pada lembar ini: ${bad.map(id => `${id} (${(engSectionMatch[id] * 100).toFixed(0)}%)`).join(', ')}. Matikan blok tersebut di Desainer LJK, atau perbaiki koordinatnya, agar rekap bersih.`, true);
-            if (!layoutWarnShown && !batchImportActive) {
-                layoutWarnShown = true;
-                showCustomAlert(
-                    'Desain belum sepenuhnya cocok dengan lembar yang dipindai.\n\n' +
-                    'Blok berikut ada di desain tetapi TIDAK ADA di kertas:\n  - ' +
-                    bad.join('\n  - ') +
-                    '\n\nBlok itu diabaikan supaya hasil pemindaian tetap bersih. ' +
-                    'Buka Desainer LJK, matikan blok tersebut (atau perbaiki koordinatnya), lalu tekan "Simpan dan Sinkronkan".'
-                );
+            const rincian = bad.map(id => `${id} (${(engSectionMatch[id] * 100).toFixed(0)}%)`).join(', ');
+            if (!engAnyAnswerMatched) {
+                // Tidak ada SATU PUN blok jawaban yang cocok. Ini bukan soal desain,
+                // melainkan lembar yang terpotong/miring/buram sehingga kisi meleset.
+                // Blok-bloknya TETAP dibaca supaya guru punya sesuatu untuk dikoreksi.
+                logAI(`${prefix} PERINGATAN - tidak ada blok jawaban yang benar-benar pas dengan kertas (${rincian}). `
+                    + `Semua blok tetap dibaca, tetapi periksa hasilnya lewat tombol "Periksa & Koreksi". `
+                    + `Biasanya penyebabnya lembar terpotong, terlalu miring, atau buram.`, true);
+            } else {
+                logAI(`${prefix} DIABAIKAN - blok berikut tidak ditemukan pada lembar ini: ${rincian}. Matikan blok tersebut di Desainer LJK, atau perbaiki koordinatnya, agar rekap bersih.`, true);
+                if (!layoutWarnShown && !batchImportActive) {
+                    layoutWarnShown = true;
+                    showCustomAlert(
+                        'Desain belum sepenuhnya cocok dengan lembar yang dipindai.\n\n' +
+                        'Blok berikut ada di desain tetapi TIDAK ADA di kertas:\n  - ' +
+                        bad.join('\n  - ') +
+                        '\n\nBlok itu diabaikan supaya hasil pemindaian tetap bersih. ' +
+                        'Buka Desainer LJK, matikan blok tersebut (atau perbaiki koordinatnya), lalu tekan "Simpan dan Sinkronkan".'
+                    );
+                }
             }
         }
         return bad;
@@ -2073,8 +2120,12 @@
         engSectionMatch = eng_verifyLayout(lat, aff, idx);
         // Seberapa cocok desain dengan kertas pada orientasi INI. Dipakai untuk
         // memutuskan apakah pemutaran 180 derajat benar-benar memperbaiki keadaan.
-        const rates = Object.keys(engSectionMatch).map(k => engSectionMatch[k]);
+        const kunci = Object.keys(engSectionMatch);
+        const rates = kunci.map(k => engSectionMatch[k]);
+        const ratesJawab = kunci.filter(k => k.indexOf('identitas.') !== 0).map(k => engSectionMatch[k]);
         engLayoutMatchBest = rates.length ? Math.max(...rates) : 0;
+        engAnswerMatchBest = ratesJawab.length ? Math.max(...ratesJawab) : 0;
+        engAnyAnswerMatched = engAnswerMatchBest >= ENG.SECTION_MATCH_MIN;
         const fills = eng_collectLayoutFills(grid);
         engFillThreshold = eng_gapThreshold(fills, eng_otsuThreshold(fills));
         mask.delete();
@@ -2599,29 +2650,51 @@
         const peserta = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.no_peserta, NUMBERS, ctx, 'no_peserta');
         const keyInfo = collectAnswerKeysForVisibleSections();
         const scoreData = shared_gradeAnswers(gridData, ctx, keyInfo.keys);
+        const ring = cam_ringkasBacaan(scoreData.detections);
         return {
             name, kelas, peserta, scoreData,
             quality: engLastQuality,
             cocok: engLayoutMatchBest,
+            cocokJawab: engAnswerMatchBest,
             threshold: engFillThreshold,
-            ragu: cam_countAmbiguous(scoreData.detections)
+            ragu: ring.ragu, soal: ring.soal, tegas: ring.tegas
         };
     }
 
     // Berapa banyak jawaban yang TIDAK tegas terbaca ('-' kosong atau '*' ganda).
     // Angka inilah yang dipakai untuk memilih frame terbaik: frame yang kabur
     // menghasilkan banyak bacaan ragu, frame yang tajam nyaris nol.
-    function cam_countAmbiguous(detections) {
-        let n = 0;
+    function cam_ringkasBacaan(detections) {
+        let ragu = 0, soal = 0, tegas = 0;
         Object.keys(detections || {}).forEach(sid => {
             const bucket = detections[sid] || {};
             Object.keys(bucket).forEach(num => {
+                soal++;
                 const v = String(bucket[num] ?? '');
-                if (!v) { n++; return; }
-                for (const ch of v) if (ch === '-' || ch === '*') n++;
+                if (!v) { ragu++; return; }
+                let buruk = 0;
+                for (const ch of v) if (ch === '-' || ch === '*') buruk++;
+                ragu += buruk;
+                if (buruk === 0) tegas++;
             });
         });
-        return n;
+        return { ragu, soal, tegas };
+    }
+
+    // Pembacaan mana yang lebih layak dipakai. Urutan penilaian:
+    //   1. paling banyak jawaban yang terbaca TEGAS  (nol jawaban = nol nilai)
+    //   2. blok jawaban paling cocok dengan desain
+    //   3. paling sedikit jawaban yang ragu
+    function cam_bacaanLebihBaik(calon, juara) {
+        if (!calon) return false;
+        if (!juara) return true;
+        if (calon.tegas !== juara.tegas) return calon.tegas > juara.tegas;
+        if (Math.abs(calon.cocokJawab - juara.cocokJawab) > 0.02) return calon.cocokJawab > juara.cocokJawab;
+        return calon.ragu < juara.ragu;
+    }
+
+    function cam_bacaanSempurna(b) {
+        return !!b && b.soal > 0 && b.tegas === b.soal && b.cocokJawab >= ENG.SECTION_MATCH_MIN;
     }
 
     function cam_commitReading(reading, warpedMat) {
@@ -2629,7 +2702,10 @@
         logDiagnosticsSummary('[KAMERA]');
         const { name, kelas, peserta, scoreData } = reading;
         const existingIndex = resultData.findIndex(d => d.peserta === peserta && d.kelas === kelas && peserta !== "-");
-        const dataRow = normalizeStoredResultRow({ name, kelas, peserta, ...scoreData });
+        const dataRow = normalizeStoredResultRow({
+            name, kelas, peserta, ...scoreData,
+            raguCount: reading.ragu, soalCount: reading.soal
+        });
         if (existingIndex !== -1) {
             dataRow.recordId = resultData[existingIndex].recordId;
             dataRow.id = resultData[existingIndex].id;
@@ -2765,9 +2841,7 @@
                 const got = cam_tryShot(list[i], fids, label, false);
                 tampilMilikPemenang = false;      // layar kini memuat frame yang baru dicoba
                 if (!got) continue;
-                const lebihBaik = !best
-                    || (got.reading.cocok > best.reading.cocok + 0.02)
-                    || (Math.abs(got.reading.cocok - best.reading.cocok) <= 0.02 && got.reading.ragu < best.reading.ragu);
+                const lebihBaik = cam_bacaanLebihBaik(got.reading, best && best.reading);
                 if (lebihBaik) {
                     if (best) best.warped.delete();
                     best = got;
@@ -2775,8 +2849,9 @@
                 } else {
                     got.warped.delete();
                 }
-                if (best.reading.ragu === 0 && best.reading.cocok >= ENG.SECTION_MATCH_MIN) break;
-                logAI(`${label} ${got.reading.ragu} jawaban belum tegas terbaca. Mencoba frame berikutnya...`);
+                if (cam_bacaanSempurna(best.reading)) break;
+                logAI(`${label} ${got.reading.tegas}/${got.reading.soal} jawaban terbaca tegas`
+                    + ` (kecocokan blok jawaban ${(got.reading.cocokJawab * 100).toFixed(0)}%). Mencoba frame berikutnya...`);
             }
             if (!best) {
                 // Enam fiducial tidak terkunci pada satu frame pun. Baru di sinilah
@@ -2795,8 +2870,10 @@
                 cam_readSheet(best.warped, null, !!best.diputar);
             }
             cam_commitReading(best.reading, best.warped);
-            logAI(`[KAMERA] Selesai. Ambang arsiran lembar ini: ${best.reading.threshold.toFixed(2)}, mutu kisi ${(best.reading.quality * 100).toFixed(0)}%`
-                + (best.reading.ragu ? `, ${best.reading.ragu} jawaban perlu diperiksa manual.` : ', seluruh jawaban terbaca tegas.'));
+            logAI(`[KAMERA] Selesai. ${best.reading.tegas}/${best.reading.soal} jawaban terbaca tegas, `
+                + `kecocokan blok jawaban ${(best.reading.cocokJawab * 100).toFixed(0)}%, mutu kisi ${(best.reading.quality * 100).toFixed(0)}%, `
+                + `ambang arsiran ${best.reading.threshold.toFixed(2)}`
+                + (best.reading.ragu ? `. ${best.reading.ragu} jawaban perlu diperiksa manual.` : '.'));
         } catch (err) {
             logAI(err.message, true); showCustomAlert(err.message);
         } finally {
@@ -3254,12 +3331,14 @@
         const peserta = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.no_peserta, NUMBERS, ctx, 'no_peserta');
         const keyInfo = collectAnswerKeysForVisibleSections();
         const scoreData = shared_gradeAnswers(gridData, ctx, keyInfo.keys);
+        const ring = cam_ringkasBacaan(scoreData.detections);
         return {
             name, kelas, peserta, scoreData,
             quality: engLastQuality,
             cocok: engLayoutMatchBest,
+            cocokJawab: engAnswerMatchBest,
             threshold: engFillThreshold,
-            ragu: cam_countAmbiguous(scoreData.detections)
+            ragu: ring.ragu, soal: ring.soal, tegas: ring.tegas
         };
     }
 
@@ -3268,7 +3347,10 @@
         logDiagnosticsSummary(prefix);
         const { name, kelas, peserta, scoreData } = reading;
         const existingIndex = resultData.findIndex(d => d.peserta === peserta && d.kelas === kelas && peserta !== "-");
-        const dataRow = normalizeStoredResultRow({ name, kelas, peserta, ...scoreData });
+        const dataRow = normalizeStoredResultRow({
+            name, kelas, peserta, ...scoreData,
+            raguCount: reading.ragu, soalCount: reading.soal
+        });
         if (existingIndex !== -1) {
             dataRow.recordId = resultData[existingIndex].recordId;
             dataRow.id = resultData[existingIndex].id;
@@ -3342,8 +3424,9 @@
             const isSuccess = !!bacaan;
             if (isSuccess) {
                 up_commitReading(bacaan, finalWarpedMat, prefix);
-                logAI(`${prefix} Selesai. Ambang arsiran lembar ini: ${bacaan.threshold.toFixed(2)}, `
-                    + `kecocokan desain ${(bacaan.cocok * 100).toFixed(0)}%${diputar ? ' (lembar diputar 180 derajat)' : ''}.`);
+                logAI(`${prefix} Selesai. ${bacaan.tegas}/${bacaan.soal} jawaban terbaca tegas, `
+                    + `kecocokan blok jawaban ${(bacaan.cocokJawab * 100).toFixed(0)}%, `
+                    + `ambang arsiran ${bacaan.threshold.toFixed(2)}${diputar ? ', lembar diputar 180 derajat' : ''}.`);
             } else if (!batchMode) {
                 showCustomAlert("Diagnostik Pemindaian:\nKisi bubble tidak dapat dikunci pada gambar ini. Gambar hasil pelurusan tetap ditampilkan agar dapat diperiksa.");
             }
@@ -3432,7 +3515,12 @@
         const reader = new FileReader();
         reader.onload = (ev) => {
             const img = new Image(); img.onload = () => {
-                let scale = Math.min(2000 / Math.max(img.width, img.height), 1.0);
+                // Pengecilan sampai 2000 px ternyata ikut membuang ketajaman tepi
+                // kotak fiducial: pada uji 27 lembar nyata, batas 2000 px menyebabkan
+                // 1 lembar gagal dan 1 lembar salah baca yang tidak terjadi pada
+                // gambar penuh. Batasnya dinaikkan secukupnya untuk tetap aman di
+                // memori ponsel.
+                let scale = Math.min(3200 / Math.max(img.width, img.height), 1.0);
                 hiddenCanvas.width = img.width * scale; hiddenCanvas.height = img.height * scale;
                 hiddenCanvas.getContext('2d').drawImage(img, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                 document.getElementById('loader-overlay').classList.remove('hidden');
@@ -3996,6 +4084,7 @@
             let tr = document.createElement('tr'); tr.className = "hover:bg-slate-50 border-b border-slate-100 text-xs transition-colors";
             tr.innerHTML = `
                 <td class="p-3 text-center whitespace-nowrap">
+                    ${(Number(d.raguCount) > 0) ? `<span class="inline-flex items-center justify-center w-5 h-5 mr-1 align-middle rounded-full bg-amber-100 text-amber-600 font-bold text-[10px]" title="${Number(d.raguCount)} jawaban tidak terbaca tegas - sebaiknya diperiksa lewat tombol mata">!</span>` : ''}
                     <button class="btn-review text-sky-600 hover:text-sky-800 bg-sky-50 hover:bg-sky-100 p-2 rounded-lg transition mr-1" title="Periksa &amp; koreksi jawaban" data-record-id="${escapeHtml(d.recordId)}">
                         <svg class="w-4 h-4 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
                     </button>
@@ -4220,7 +4309,8 @@
         // dipakai oleh berkas uji untuk memeriksa keputusan orientasi
         _orientasi: { perluCoba180: eng_perluCoba180, pilih180: eng_pilih180 },
         _kamera: { gerbangTajam: cam_hitungGerbangTajam, paksaTangkapMs: CAM_FORCE_CAPTURE_MS,
-                   frameStabil: STABLE_FRAMES_TO_CAPTURE, burst: CAM_BURST_FRAMES },
+                   frameStabil: STABLE_FRAMES_TO_CAPTURE, burst: CAM_BURST_FRAMES,
+                   ringkas: cam_ringkasBacaan, lebihBaik: cam_bacaanLebihBaik, sempurna: cam_bacaanSempurna },
         getEngineState: () => ({ fillThreshold: engFillThreshold, gridQuality: engLastQuality,
             lattice: engLastLattice ? { ...engLastLattice } : null,
             affine: engLastAffine ? { cx: [...engLastAffine.cx], cy: [...engLastAffine.cy], n: engLastAffine.n } : null })
