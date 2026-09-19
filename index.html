@@ -76,7 +76,7 @@
                 <video id="video" playsinline autoplay muted class="hidden"></video>
                 <canvas id="overlay-canvas" class="hidden pointer-events-none"></canvas>
                 <canvas id="result-canvas" class="hidden z-40 bg-white shadow-xl"></canvas>
-                
+
                 <div id="loader-overlay" class="absolute inset-0 bg-slate-900/95 hidden flex-col justify-center items-center z-50 backdrop-blur-sm">
                     <div class="loader mb-4"></div>
                     <p id="loader-text" class="text-xs font-bold text-emerald-400 tracking-widest animate-pulse uppercase text-center leading-relaxed">
@@ -142,7 +142,7 @@
             </h3>
             <p class="text-sm font-medium mt-2 text-slate-300">Dirancang untuk kebutuhan evaluasi berbasis LJK yang presisi dan praktis</p>
         </div>
-        
+
         <div class="bg-slate-800/80 backdrop-blur-sm px-8 py-5 rounded-2xl border border-slate-700/50 shadow-xl transform hover:-translate-y-1 transition duration-300">
             <p class="font-black text-xl text-emerald-400 tracking-wider">YUSUF ARIS SYAMSUDDIN</p>
             <div class="flex flex-col sm:flex-row items-center justify-center gap-3 mt-3">
@@ -150,7 +150,7 @@
                 <p class="text-xs font-semibold text-slate-300 bg-slate-700/30 px-4 py-1.5 rounded-lg">Guru IPA & Informatika - SMPN 2 Secang</p>
             </div>
         </div>
-        
+
         <div class="w-16 h-1 bg-slate-700 rounded-full my-2"></div>
         <p class="text-xs font-medium opacity-60 hover:opacity-100 transition-opacity">&copy; 2026 Hak Cipta Dilindungi. Enterprise Stable Version V67.</p>
     </div>
@@ -161,7 +161,7 @@
     <div class="modal-container bg-white w-11/12 md:max-w-sm mx-auto rounded-xl shadow-2xl z-50 overflow-hidden text-center p-6 transform transition-all">
         <h3 class="text-xl font-black text-slate-800 mb-2">Pilih Sumber Gambar LJK</h3>
         <p class="text-sm text-slate-500 mb-6">Pilih metode pengambilan gambar. Setiap file akan diproses melalui jalur upload dengan kalibrasi fiducial presisi.</p>
-        
+
         <div class="flex flex-col gap-3">
             <label class="w-full px-4 py-3.5 bg-emerald-600 text-white rounded-lg font-bold shadow-md hover:bg-emerald-700 hover:shadow-lg transition cursor-pointer flex items-center justify-center gap-3">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path></svg>
@@ -600,7 +600,7 @@
     const RESULT_STORAGE_KEY = 'ljk-suite-scan-results-v1';
 
     let resultData = [], scanCounter = 1, videoScanLoop = null;
-    let isProcessing = false; 
+    let isProcessing = false;
     let pendingUpdateData = null, pendingUpdateIndex = -1, pendingDeleteId = null, pendingDeleteAll = false;
     let batchImportActive = false;
     let tableSort = { field: 'peserta', dir: 'asc' };
@@ -609,6 +609,9 @@
     let camLostFrames = 0;
     let camLastFids = null;
     let camLastProcessTime = 0;
+    let camSharpPeak = 0;        // ketajaman terbaik yang pernah terlihat (meluruh pelan)
+    let camLockedSince = 0;      // sejak kapan keenam kotak terus-menerus ketemu
+    let camReadyFids = null;     // titik fiducial siap pakai, dalam koordinat video
 
     // Loop pelacakan kini jauh lebih ringan (tidak lagi membaca citra resolusi penuh),
     // jadi bisa berjalan ~30 kali per detik. Jumlah frame stabil yang diminta pun
@@ -616,8 +619,17 @@
     // menangkap. Hasilnya: menunggu diam ~0,23 detik, bukan ~0,45 detik.
     const TRACK_INTERVAL_MS = 33;
     const STABLE_FRAMES_TO_CAPTURE = 7;
-    const MIN_CONFIDENCE = 0.90; 
-    const MIN_SHARPNESS = 90; 
+    const MIN_CONFIDENCE = 0.90;
+    // Ambang ketajaman MENYESUAIKAN DIRI dengan kamera perangkat. Nilai varian
+    // Laplacian sangat berbeda antar HP dan antar resolusi, sehingga satu angka
+    // tetap bisa membuat sebuah perangkat dianggap "tidak pernah cukup tajam" -
+    // dan penangkapan otomatis tidak pernah terjadi sama sekali.
+    const MIN_SHARPNESS_FLOOR = 25;
+    const SHARP_RATIO = 0.55;
+    // Jaring pengaman: bila keenam kotak sudah terkunci selama ini tetapi gerbang
+    // kestabilan tak kunjung penuh, lembar tetap ditangkap. Frame tertajam dari
+    // tiga tangkapan tetap dipilih, jadi hasilnya tetap terjaga.
+    const CAM_FORCE_CAPTURE_MS = 3500;
     const MAX_MOVE_PX = 3; 
     const TRACK_W = 500.0;
     // Tangkapan akhir diambil beberapa frame sekaligus lalu dipilih yang PALING TAJAM.
@@ -627,8 +639,8 @@
     const CAM_BURST_GAP_MS = 60;
     // Resolusi tangkapan: makin banyak piksel pada kertas, makin tegas tepi bubble
     // dan kotak fiducial. Pelacakan langsung TETAP di TRACK_W supaya tetap ringan.
-    const CAM_CAPTURE_IDEAL_W = 2560;
-    const CAM_CAPTURE_IDEAL_H = 1440;
+    const CAM_CAPTURE_IDEAL_W = 1920;
+    const CAM_CAPTURE_IDEAL_H = 1080;
 
     const video = document.getElementById('video'), overlayCanvas = document.getElementById('overlay-canvas');
     const hiddenCanvas = document.getElementById('hidden-canvas'), resultCanvas = document.getElementById('result-canvas');
@@ -912,14 +924,14 @@
 
     function logAI(msg, isError = false) {
         const logBox = document.getElementById('ai-log');
-        if (logBox) { 
+        if (logBox) {
             let t = new Date().toLocaleTimeString('id-ID', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
             let newLog = `> [${t}] ${isError ? `<span class="text-red-500 font-bold">${msg}</span>` : msg}`;
             let lines = logBox.innerHTML.split('<br>').filter(l => l.trim() !== '');
             lines.push(newLog);
-            if (lines.length > 20) lines = lines.slice(lines.length - 20); 
+            if (lines.length > 20) lines = lines.slice(lines.length - 20);
             logBox.innerHTML = lines.join('<br>') + '<br>';
-            logBox.scrollTop = logBox.scrollHeight; 
+            logBox.scrollTop = logBox.scrollHeight;
         }
     }
 
@@ -928,10 +940,10 @@
         if (video.srcObject) { video.srcObject.getTracks().forEach(t => t.stop()); video.srcObject = null; }
         resultCanvas.classList.add('hidden'); resultCanvas.style.display = 'none';
         overlayCanvas.getContext('2d').clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-        video.classList.add('hidden'); overlayCanvas.classList.add('hidden'); 
+        video.classList.add('hidden'); overlayCanvas.classList.add('hidden');
         document.getElementById('placeholder-text').classList.add('hidden');
         camStableFrames = 0; camLostFrames = 0; camLastFids = null; camLastProcessTime = 0;
-        isProcessing = false; 
+        isProcessing = false;
         scanStatus.innerText = "Pemindai kamera tidak aktif";
     }
 
@@ -1113,6 +1125,7 @@
         SCORE_SCALE: 0.5,         // skala warp saat menilai hipotesis (ringan)
         CONF_GOOD: 0.88,          // berhenti lebih awal bila sudah sangat baik
         BG_BLUR_SCALE: 0.25,
+        ROI_MIN_POINTS: 60,
         FAINT_FLOOR: 0.45,        // batas bawah mutlak untuk arsiran samar
         FAINT_DOMINANCE: 1.6,     // harus sekian kali lebih pekat dari saingan
         FAINT_RIVAL_MAX: 0.35     // saingan harus benar-benar bersih
@@ -1461,6 +1474,12 @@
             return eng_bubbleCentroids(warped, pitchArg);
         }
         view.delete(); sub.delete();
+        // Jaring pengaman: kalau wilayah desain ternyata TIDAK memuat bubble sebanyak
+        // yang wajar (desain belum cocok dengan kertas, blok digeser, kertas beda
+        // versi), jangan biarkan kisi kelaparan titik - ulangi pada seluruh lembar.
+        // Tanpa ini, pembacaan pertama gagal lalu aplikasi "menyelamatkan diri" dengan
+        // memutar lembar 180 derajat, dan hasilnya tampil terbalik.
+        if (pts.length < ENG.ROI_MIN_POINTS) return eng_bubbleCentroids(warped, pitchArg);
         for (let i = 0; i < pts.length; i++) { pts[i][0] += roi.x; pts[i][1] += roi.y; }
         return pts;
     }
@@ -1910,6 +1929,7 @@
     // kemana-mana". Jadi setiap sel desain dicocokkan dulu dengan bubble tercetak.
     let engBubbleIndex = null;
     let engSectionMatch = {};
+    let engLayoutMatchBest = 0;
 
     function eng_buildBubbleIndex(pts, lat) {
         const pitch = lat ? (lat.pitchX + lat.pitchY) / 2 : GRID_SIZE;
@@ -1980,6 +2000,21 @@
         return match;
     }
 
+    // Keputusan orientasi, dipisah agar bisa diuji sendiri.
+    // Lembar hanya boleh dibalik bila sel-sel desain jadi NYATA lebih banyak yang
+    // jatuh tepat di atas bubble tercetak. Keteraturan kisi TIDAK bisa dipakai di
+    // sini: lembar terbalik punya kisi yang sama teraturnya - itulah sebabnya dulu
+    // hasil pemutaran bisa diterima walau lembarnya sebenarnya sudah tegak.
+    const ENG_ORIENT_GAIN = 0.02;
+    function eng_perluCoba180(bacaan) {
+        return !bacaan || Number(bacaan.cocok || 0) < ENG.SECTION_MATCH_MIN;
+    }
+    function eng_pilih180(bacaan, bacaan180) {
+        if (!bacaan180) return false;
+        if (!bacaan) return true;
+        return Number(bacaan180.cocok || 0) > Number(bacaan.cocok || 0) + ENG_ORIENT_GAIN;
+    }
+
     function eng_sectionPresent(id) {
         const rate = engSectionMatch[id];
         return rate === undefined ? true : rate >= ENG.SECTION_MATCH_MIN;
@@ -2018,9 +2053,15 @@
         // dan verifikasi - sebelumnya proses berat ini berjalan berkali-kali.
         // Bila tahap deteksi sudah menghitungnya untuk lembar yang SAMA, hasilnya
         // dipakai langsung sehingga pencarian kontur tidak berjalan dua kali.
-        const reuse = !!(pre && pre.pts && pre.pts.length >= 25);
-        const pts = reuse ? pre.pts : eng_bubbleCentroidsDesign(warped, GRID_SIZE, !(opts && opts.fullScan));
-        const lat = (reuse && pre.lat) ? pre.lat : eng_fitLatticeFromPts(pts, GRID_SIZE);
+        const reuse = !!(pre && pre.pts && pre.pts.length >= 25 && pre.lat);
+        let pts = reuse ? pre.pts : eng_bubbleCentroidsDesign(warped, GRID_SIZE, !(opts && opts.fullScan));
+        let lat = reuse ? pre.lat : eng_fitLatticeFromPts(pts, GRID_SIZE);
+        if (!lat) {
+            // Percobaan terakhir sebelum menyerah: ukur seluruh lembar, bukan hanya
+            // wilayah desain. Lebih lambat, tetapi hanya terjadi bila yang cepat gagal.
+            pts = eng_bubbleCentroids(warped, GRID_SIZE);
+            lat = eng_fitLatticeFromPts(pts, GRID_SIZE);
+        }
         const aff = eng_fitAffine(warped, lat, pts);
         const idx = eng_buildBubbleIndex(pts, lat);
         const mask = eng_buildSampleMask(warped);
@@ -2030,6 +2071,10 @@
         engBubbleIndex = idx;
         engLastQuality = lat ? lat.conf : 0;
         engSectionMatch = eng_verifyLayout(lat, aff, idx);
+        // Seberapa cocok desain dengan kertas pada orientasi INI. Dipakai untuk
+        // memutuskan apakah pemutaran 180 derajat benar-benar memperbaiki keadaan.
+        const rates = Object.keys(engSectionMatch).map(k => engSectionMatch[k]);
+        engLayoutMatchBest = rates.length ? Math.max(...rates) : 0;
         const fills = eng_collectLayoutFills(grid);
         engFillThreshold = eng_gapThreshold(fills, eng_otsuThreshold(fills));
         mask.delete();
@@ -2357,7 +2402,7 @@
 
         let wTop = shared_dist(fids.TL, fids.TR);
         let wBot = shared_dist(fids.BL, fids.BR);
-        let wRatio = Math.min(wTop, wBot) / Math.max(wTop, wBot); 
+        let wRatio = Math.min(wTop, wBot) / Math.max(wTop, wBot);
 
         let confidence = (1 - ratioDiff) * 0.7 + (wRatio) * 0.3;
         return Math.max(0, Math.min(1, confidence));
@@ -2498,7 +2543,7 @@
 
     function cam_performDualWarp(src, fid) {
         let fullWarped = new cv.Mat(getWarpHeight(), getWarpWidth(), cv.CV_8UC4, new cv.Scalar(255,255,255,255));
-        
+
         // PERBAIKAN: Rasio LJK fisik mutlak (Fiducial tengah persis di getMiddleGuideRatio())
         let splitY = getSplitRows() * GRID_SIZE;
         let botHeight = getWarpHeight() - splitY;
@@ -2523,7 +2568,7 @@
         srcTop.delete(); dstTop.delete(); M_Top.delete(); warpTop.delete(); roiTop.delete();
         srcBot.delete(); dstBot.delete(); M_Bot.delete(); warpBot.delete(); roiBot.delete();
 
-        return fullWarped; 
+        return fullWarped;
     }
 
     // Membaca satu lembar hasil warp TANPA menyimpannya ke rekap. Dipisah dari
@@ -2557,6 +2602,7 @@
         return {
             name, kelas, peserta, scoreData,
             quality: engLastQuality,
+            cocok: engLayoutMatchBest,
             threshold: engFillThreshold,
             ragu: cam_countAmbiguous(scoreData.detections)
         };
@@ -2682,12 +2728,19 @@
 
             let reading = cam_readSheet(warped, pre, false);
             let diputar = false;
-            if (!reading) {
-                logAI(`${label} Kisi tidak terbaca. Mencoba rotasi 180 derajat...`);
+            if (eng_perluCoba180(reading)) {
+                logAI(`${label} ${reading ? 'Desain belum cocok dengan lembar' : 'Kisi tidak terbaca'}. Mencoba rotasi 180 derajat...`);
                 cv.rotate(warped, warped, cv.ROTATE_180);
                 cv.imshow('result-canvas', warped);
-                diputar = true;
-                reading = cam_readSheet(warped, null, true);
+                const r180 = cam_readSheet(warped, null, true);
+                if (eng_pilih180(reading, r180)) {
+                    reading = r180; diputar = true;
+                } else {
+                    // Putaran tidak memperbaiki apa pun - kembalikan seperti semula.
+                    cv.rotate(warped, warped, cv.ROTATE_180);
+                    cv.imshow('result-canvas', warped);
+                    if (reading) reading = cam_readSheet(warped, null, false) || reading;
+                }
             }
             if (!reading) { warped.delete(); return null; }
             return { reading, warped, diputar };
@@ -2712,14 +2765,17 @@
                 const got = cam_tryShot(list[i], fids, label, false);
                 tampilMilikPemenang = false;      // layar kini memuat frame yang baru dicoba
                 if (!got) continue;
-                if (!best || got.reading.ragu < best.reading.ragu) {
+                const lebihBaik = !best
+                    || (got.reading.cocok > best.reading.cocok + 0.02)
+                    || (Math.abs(got.reading.cocok - best.reading.cocok) <= 0.02 && got.reading.ragu < best.reading.ragu);
+                if (lebihBaik) {
                     if (best) best.warped.delete();
                     best = got;
                     tampilMilikPemenang = true;
                 } else {
                     got.warped.delete();
                 }
-                if (best.reading.ragu === 0) break;
+                if (best.reading.ragu === 0 && best.reading.cocok >= ENG.SECTION_MATCH_MIN) break;
                 logAI(`${label} ${got.reading.ragu} jawaban belum tegas terbaca. Mencoba frame berikutnya...`);
             }
             if (!best) {
@@ -2754,8 +2810,8 @@
     // perangkat. Kertas yang terisi lebih banyak piksel = tepi bubble lebih tegas.
     async function cam_openStream() {
         const coba = [
-            { facingMode: { ideal: 'environment' }, width: { ideal: CAM_CAPTURE_IDEAL_W }, height: { ideal: CAM_CAPTURE_IDEAL_H }, focusMode: { ideal: 'continuous' } },
-            { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+            { facingMode: { ideal: 'environment' }, width: { ideal: CAM_CAPTURE_IDEAL_W }, height: { ideal: CAM_CAPTURE_IDEAL_H } },
+            { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
             { facingMode: 'environment' },
             true
         ];
@@ -2767,13 +2823,19 @@
         throw lastErr || new Error('Kamera tidak dapat dibuka.');
     }
 
+    // Ketuk pratinjau untuk menangkap segera - berguna bila kondisi cahaya membuat
+    // gerbang otomatis terlalu berhati-hati.
+    [video, overlayCanvas].forEach(el => el.addEventListener('click', () => {
+        if (video.srcObject && !isProcessing) cam_triggerCapture();
+    }));
+
     document.getElementById('btn-camera').addEventListener('click', async () => {
-        if (!validateKey() || isProcessing) return; 
+        if (!validateKey() || isProcessing) return;
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { showCustomAlert("Browser belum memberikan izin akses kamera."); return; }
-        
-        resetUI(); 
+
+        resetUI();
         video.classList.remove('hidden'); overlayCanvas.classList.remove('hidden');
-        
+
         try {
             const stream = await cam_openStream();
             video.srcObject = stream;
@@ -2795,14 +2857,40 @@
         } catch (e) { logAI("Kamera Error: " + e.message, true); showCustomAlert("Akses kamera ditolak oleh browser atau perangkat."); resetUI(); }
     });
 
+    // Satu pintu penangkapan: dipakai oleh gerbang kestabilan, jaring pengaman
+    // waktu, maupun ketukan layar oleh guru.
+    // Gerbang ketajaman yang menyesuaikan diri, dipisah agar bisa diuji sendiri.
+    // Yang dinilai adalah ketajaman frame ini DIBANDING frame terbaik yang pernah
+    // terlihat pada kamera ini, bukan sebuah angka mutlak. Dengan begitu kamera
+    // apa pun - dan resolusi apa pun - tetap bisa mencapai keadaan "cukup tajam".
+    function cam_hitungGerbangTajam(sharpness, peakLama) {
+        const peak = Math.max(sharpness, (peakLama || 0) * 0.985);
+        const gate = Math.max(MIN_SHARPNESS_FLOOR, peak * SHARP_RATIO);
+        return { peak, gate, ok: sharpness >= gate };
+    }
+
+    function cam_triggerCapture() {
+        if (isProcessing || !camReadyFids) return false;
+        isProcessing = true;
+        if (videoScanLoop) cancelAnimationFrame(videoScanLoop);
+        const finalFids = camReadyFids;
+        // Kamera JANGAN dimatikan dulu: frame beruntun masih diambil dari video
+        // yang hidup. Pematian dilakukan setelah frame terkumpul.
+        document.getElementById('loader-overlay').classList.remove('hidden');
+        scanStatus.innerHTML = '<span class="text-emerald-500 font-bold">MENANGKAP...</span>';
+        cam_captureBurst(finalFids);
+        return true;
+    }
+
     function startStreamLoop() {
         if (videoScanLoop) cancelAnimationFrame(videoScanLoop);
         camStableFrames = 0; camLostFrames = 0; camLastFids = null; camLastProcessTime = 0;
+        camSharpPeak = 0; camLockedSince = 0; camReadyFids = null;
 
         function loop(timestamp) {
             if (!video.paused && !video.ended && !isProcessing) {
-                if (video.videoWidth === 0 || timestamp - camLastProcessTime < TRACK_INTERVAL_MS) { 
-                    videoScanLoop = requestAnimationFrame(loop); return; 
+                if (video.videoWidth === 0 || timestamp - camLastProcessTime < TRACK_INTERVAL_MS) {
+                    videoScanLoop = requestAnimationFrame(loop); return;
                 }
                 camLastProcessTime = timestamp;
 
@@ -2812,7 +2900,7 @@
                     let cw = overlayCanvas.width;
                     let ch = overlayCanvas.height;
                     hiddenCanvas.getContext('2d').drawImage(video, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
-                    
+
                     let guideW = cw * 0.75;
                     let guideH = guideW * (getWarpHeight() / getWarpWidth());
                     if (guideH > ch * 0.85) {
@@ -2855,7 +2943,7 @@
                     }
 
                     if (!fids) {
-                        fids = cam_executeFastFiducialTracker(gray, initialFids, 45); 
+                        fids = cam_executeFastFiducialTracker(gray, initialFids, 45);
                     }
 
                     if (!fids && camLostFrames > 5) {
@@ -2880,11 +2968,11 @@
                     let boxSize = Math.max(40, cw * 0.08);
                     ctx.lineWidth = 3;
                     ctx.setLineDash([10, 5]);
-                    
+
                     if (fids && camStableFrames > 0) {
-                        ctx.strokeStyle = "rgba(16, 185, 129, 0.2)"; 
+                        ctx.strokeStyle = "rgba(16, 185, 129, 0.2)";
                     } else if (!fids && camLostFrames > 0) {
-                        ctx.strokeStyle = "rgba(255, 255, 255, 0.8)"; 
+                        ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
                     } else {
                         ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
                     }
@@ -2896,10 +2984,16 @@
                     ctx.setLineDash([]);
 
                     if (fids) {
-                        let conf = cam_computeConfidence(fids);
-                        let move = cam_maxCornerMovement(camLastFids, fids);
+                        const conf = cam_computeConfidence(fids);
+                        const move = cam_maxCornerMovement(camLastFids, fids);
 
-                        if (conf >= MIN_CONFIDENCE && sharpness >= MIN_SHARPNESS && move <= MAX_MOVE_PX) {
+                        const gTajam = cam_hitungGerbangTajam(sharpness, camSharpPeak);
+                        camSharpPeak = gTajam.peak;
+                        const okConf = conf >= MIN_CONFIDENCE;
+                        const okSharp = gTajam.ok;
+                        const okMove = move <= MAX_MOVE_PX;
+
+                        if (okConf && okSharp && okMove) {
                             camStableFrames++;
                             camLostFrames = 0;
                         } else {
@@ -2907,9 +3001,19 @@
                         }
 
                         camLastFids = cam_smoothFids(camLastFids, fids, 0.7);
+                        if (!camLockedSince) camLockedSince = timestamp;
+                        camReadyFids = {};
+                        for (const k in camLastFids) camReadyFids[k] = { x: camLastFids[k].x / scale, y: camLastFids[k].y / scale };
 
-                        let stabPercent = Math.min(100, Math.round((camStableFrames / STABLE_FRAMES_TO_CAPTURE) * 100));
-                        scanStatus.innerHTML = `<span class="text-emerald-500 font-bold">STABIL ${stabPercent}%</span>`;
+                        const stabPercent = Math.min(100, Math.round((camStableFrames / STABLE_FRAMES_TO_CAPTURE) * 100));
+                        // Katakan APA yang sedang menghambat, jangan hanya diam di 0%.
+                        let pesan, warna;
+                        if (!okConf) { pesan = 'SEJAJARKAN KERTAS'; warna = 'text-amber-500'; }
+                        else if (!okSharp) { pesan = 'ATUR FOKUS / TAMBAH CAHAYA'; warna = 'text-amber-500'; }
+                        else if (!okMove) { pesan = 'TAHAN, JANGAN BERGERAK'; warna = 'text-amber-500'; }
+                        else { pesan = `STABIL ${stabPercent}%`; warna = 'text-emerald-500'; }
+                        scanStatus.innerHTML = `<span class="${warna} font-bold">${pesan}</span>`
+                            + `<span class="block text-[10px] font-normal text-slate-400">ketuk layar untuk menangkap sekarang</span>`;
 
                         ctx.beginPath();
                         ctx.moveTo(camLastFids.TL.x / scale, camLastFids.TL.y / scale);
@@ -2917,31 +3021,30 @@
                         ctx.lineTo(camLastFids.BR.x / scale, camLastFids.BR.y / scale);
                         ctx.lineTo(camLastFids.BL.x / scale, camLastFids.BL.y / scale);
                         ctx.closePath();
-                        ctx.fillStyle = "rgba(16, 185, 129, 0.25)"; ctx.fill(); 
+                        ctx.fillStyle = "rgba(16, 185, 129, 0.25)"; ctx.fill();
                         ctx.lineWidth = 4; ctx.strokeStyle = (camStableFrames >= STABLE_FRAMES_TO_CAPTURE/2) ? "#10b981" : "#f59e0b"; ctx.stroke();
 
-                        if (camStableFrames >= STABLE_FRAMES_TO_CAPTURE) { 
-                            isProcessing = true; cancelAnimationFrame(videoScanLoop); 
-                            let finalFids = {};
-                            for(let k in camLastFids) finalFids[k] = { x: camLastFids[k].x / scale, y: camLastFids[k].y / scale };
-                            
-                            // Kamera JANGAN dimatikan dulu: frame beruntun masih diambil
-                            // dari video yang hidup. Pematian dilakukan di akhir tangkapan.
-                            document.getElementById('loader-overlay').classList.remove('hidden');
-                            scanStatus.innerHTML = '<span class="text-emerald-500 font-bold">MENANGKAP...</span>';
-                            cam_captureBurst(finalFids);
-                            return; 
+                        const terlaluLama = camLockedSince && (timestamp - camLockedSince) > CAM_FORCE_CAPTURE_MS;
+                        if (camStableFrames >= STABLE_FRAMES_TO_CAPTURE || terlaluLama) {
+                            if (terlaluLama && camStableFrames < STABLE_FRAMES_TO_CAPTURE) {
+                                logAI('[KAMERA] Kotak sudut sudah terkunci cukup lama namun frame belum benar-benar tenang. Menangkap sekarang dan memilih frame tertajam.');
+                            }
+                            // Kalau karena suatu hal penangkapan tidak jadi dimulai,
+                            // loop pratinjau harus tetap hidup - jangan membeku.
+                            if (!cam_triggerCapture()) videoScanLoop = requestAnimationFrame(loop);
+                            return;
                         }
                     } else {
                         camLostFrames++;
                         camStableFrames = Math.max(0, camStableFrames - 1);
+                        camLockedSince = 0;
                         scanStatus.innerHTML = `<span class="text-blue-500 font-bold">MENCARI KOTAK SUDUT...</span>`;
                     }
                 } catch (err) { console.error(err); }
                 finally { if(smallMat) smallMat.delete(); if(gray) gray.delete(); }
                 if(!isProcessing) videoScanLoop = requestAnimationFrame(loop);
             }
-        } 
+        }
         loop(0);
     }
 
@@ -3001,7 +3104,7 @@
                     }
                 }
                 contours.delete(); hierarchy.delete(); edges.delete();
-                if (bestPts) break; 
+                if (bestPts) break;
             }
         } finally {
             procMat.delete(); gray.delete(); blur.delete();
@@ -3066,13 +3169,13 @@
                     for (let k = j + 1; k < pts.length; k++) {
                         let p1 = pts[i], p2 = pts[j], p3 = pts[k];
                         let combo = [p1, p2, p3].sort((a, b) => a.y - b.y);
-                        
+
                         let ySpan = combo[2].y - combo[0].y;
                         if (ySpan < h * 0.6) continue;
 
                         let avgX = (combo[0].x + combo[1].x + combo[2].x) / 3;
                         let vX = Math.pow(combo[0].x - avgX, 2) + Math.pow(combo[1].x - avgX, 2) + Math.pow(combo[2].x - avgX, 2);
-                        
+
                         if (vX < minVar) {
                             minVar = vX;
                             bestCombo = combo;
@@ -3080,7 +3183,7 @@
                     }
                 }
             }
-            return bestCombo || pts.sort((a, b) => a.y - b.y).slice(0, 3); 
+            return bestCombo || pts.sort((a, b) => a.y - b.y).slice(0, 3);
         };
 
         let finalLeft = filterBest3(leftPts);
@@ -3096,7 +3199,7 @@
 
     function up_performDualWarp(src, fid) {
         let fullWarped = new cv.Mat(getWarpHeight(), getWarpWidth(), cv.CV_8UC4, new cv.Scalar(255,255,255,255));
-        
+
         // PERBAIKAN: Rasio LJK fisik mutlak (Fiducial tengah persis di getMiddleGuideRatio())
         let splitY = getSplitRows() * GRID_SIZE;
         let botHeight = getWarpHeight() - splitY;
@@ -3120,63 +3223,69 @@
 
         srcTop.delete(); dstTop.delete(); M_Top.delete(); warpTop.delete(); roiTop.delete();
         srcBot.delete(); dstBot.delete(); M_Bot.delete(); warpBot.delete(); roiBot.delete();
-        return fullWarped; 
+        return fullWarped;
     }
 
-    function up_performExtraction(warpedMat, pre, fullScan) {
+    // Membaca lembar TANPA menyimpan ke rekap, sama seperti jalur kamera. Dengan
+    // pemisahan ini, orientasi 0 vs 180 derajat bisa dibandingkan dulu, lalu hanya
+    // yang benar-benar cocok dengan desain yang masuk ke tabel.
+    function up_readSheet(warpedMat, pre, fullScan) {
         currentScanSource = 'upload';
         resetDiagnostics();
-        let ctx = resultCanvas.getContext('2d');
-        try {
-            const gridRows = getGridRowsCount();
-            const gridCols = getGridColsCount();
-            // Mesin V2: kalibrasi kisi otomatis + pengukuran arsiran berbasis cakram.
-            const gridData = eng_prepareGrid(warpedMat, pre, { fullScan: !!fullScan });
-            if (engLastQuality < 0.25) return false;   // kisi tak terbaca -> minta rotasi/ulang
+        const ctx = resultCanvas.getContext('2d');
+        const gridRows = getGridRowsCount();
+        const gridCols = getGridColsCount();
+        const gridData = eng_prepareGrid(warpedMat, pre, { fullScan: !!fullScan });
+        if (engLastQuality < 0.25) return null;   // kisi tak terbaca -> minta rotasi/ulang
 
-            ctx.strokeStyle = "rgba(239, 68, 68, 0.18)"; ctx.lineWidth = 1;
-            for (let r = 0; r < gridRows; r++) {
-                for (let c = 0; c < gridCols; c++) {
-                    const cell = gridData[r][c];
-                    if (!cell || !cell.centerArea) continue;
-                    ctx.beginPath();
-                    ctx.arc(cell.cx, cell.cy, 2, 0, 2 * Math.PI);
-                    ctx.stroke();
-                }
+        ctx.strokeStyle = "rgba(239, 68, 68, 0.18)"; ctx.lineWidth = 1;
+        for (let r = 0; r < gridRows; r++) {
+            for (let c = 0; c < gridCols; c++) {
+                const cell = gridData[r][c];
+                if (!cell || !cell.centerArea) continue;
+                ctx.beginPath();
+                ctx.arc(cell.cx, cell.cy, 2, 0, 2 * Math.PI);
+                ctx.stroke();
             }
-
-            let name = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.nama, ALPHABET, ctx, 'nama');
-            let kelas = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.kelas, KELAS_VALS, ctx, 'kelas');
-            let peserta = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.no_peserta, NUMBERS, ctx, 'no_peserta');
-            const keyInfo = collectAnswerKeysForVisibleSections();
-            let scoreData = shared_gradeAnswers(gridData, ctx, keyInfo.keys);
-            eng_reportLayoutMatch('[UPLOAD]');
-            logDiagnosticsSummary('[UPLOAD]');
-
-            let existingIndex = resultData.findIndex(d => d.peserta === peserta && d.kelas === kelas && peserta !== "-");
-            let dataRow = normalizeStoredResultRow({ name, kelas, peserta, ...scoreData });
-            if (existingIndex !== -1) {
-                dataRow.recordId = resultData[existingIndex].recordId;
-                dataRow.id = resultData[existingIndex].id;
-                attachReviewShot(dataRow, warpedMat);
-                if (batchImportActive) {
-                    resultData[existingIndex] = dataRow;
-                } else {
-                    showPopupResult(dataRow, true, existingIndex);
-                }
-            } else {
-                dataRow.recordId = createRecordId();
-                dataRow.id = String(scanCounter++);
-                attachReviewShot(dataRow, warpedMat);
-                resultData.push(dataRow);
-                if (!batchImportActive) showPopupResult(dataRow, false);
-            }
-            updateTable();
-            
-            return true; 
-        } finally {
-            /* mesin V2 mengelola Mat internalnya sendiri */
         }
+
+        const name = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.nama, ALPHABET, ctx, 'nama');
+        const kelas = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.kelas, KELAS_VALS, ctx, 'kelas');
+        const peserta = shared_extractIdentity(gridData, activeLayoutConfig.identitas?.no_peserta, NUMBERS, ctx, 'no_peserta');
+        const keyInfo = collectAnswerKeysForVisibleSections();
+        const scoreData = shared_gradeAnswers(gridData, ctx, keyInfo.keys);
+        return {
+            name, kelas, peserta, scoreData,
+            quality: engLastQuality,
+            cocok: engLayoutMatchBest,
+            threshold: engFillThreshold,
+            ragu: cam_countAmbiguous(scoreData.detections)
+        };
+    }
+
+    function up_commitReading(reading, warpedMat, prefix) {
+        eng_reportLayoutMatch(prefix);
+        logDiagnosticsSummary(prefix);
+        const { name, kelas, peserta, scoreData } = reading;
+        const existingIndex = resultData.findIndex(d => d.peserta === peserta && d.kelas === kelas && peserta !== "-");
+        const dataRow = normalizeStoredResultRow({ name, kelas, peserta, ...scoreData });
+        if (existingIndex !== -1) {
+            dataRow.recordId = resultData[existingIndex].recordId;
+            dataRow.id = resultData[existingIndex].id;
+            attachReviewShot(dataRow, warpedMat);
+            if (batchImportActive) {
+                resultData[existingIndex] = dataRow;
+            } else {
+                showPopupResult(dataRow, true, existingIndex);
+            }
+        } else {
+            dataRow.recordId = createRecordId();
+            dataRow.id = String(scanCounter++);
+            attachReviewShot(dataRow, warpedMat);
+            resultData.push(dataRow);
+            if (!batchImportActive) showPopupResult(dataRow, false);
+        }
+        updateTable();
     }
 
     function runUploadPipeline(canvas, options = {}) {
@@ -3201,18 +3310,43 @@
             document.getElementById('result-canvas').style.display = 'block';
             document.getElementById('result-canvas').classList.remove('hidden');
 
-            // Rotasi 180 derajat mengubah gambar, jadi centroid lama tidak dipakai lagi.
-            let isSuccess = up_performExtraction(finalWarpedMat, best);
-            if (!isSuccess) {
-                logAI(`${prefix} Kisi tidak terbaca. Mencoba rotasi 180 derajat...`);
+            let bacaan = up_readSheet(finalWarpedMat, best, false);
+            let diputar = false;
+
+            // Pemutaran 180 derajat HANYA sah bila desain jadi lebih cocok dengan
+            // kertas. Dulu hasil putaran langsung diterima begitu kisinya terbaca -
+            // padahal keteraturan kisi sama saja pada lembar yang terbalik, sehingga
+            // lembar yang sebenarnya sudah tegak bisa ikut dibalik.
+            const perluCoba180 = eng_perluCoba180(bacaan);
+            if (perluCoba180) {
+                logAI(`${prefix} ${bacaan ? 'Desain belum cocok dengan lembar' : 'Kisi tidak terbaca'}. Mencoba rotasi 180 derajat...`);
                 cv.rotate(finalWarpedMat, finalWarpedMat, cv.ROTATE_180);
                 cv.imshow('result-canvas', finalWarpedMat);
-                isSuccess = up_performExtraction(finalWarpedMat, null, true);
-                if (!isSuccess && !batchMode) {
-                    showCustomAlert("Diagnostik Pemindaian:\nKisi bubble tidak dapat dikunci pada gambar ini. Gambar hasil pelurusan tetap ditampilkan agar dapat diperiksa.");
+                const bacaan180 = up_readSheet(finalWarpedMat, null, true);
+                const lebihBaik = eng_pilih180(bacaan, bacaan180);
+                if (lebihBaik) {
+                    bacaan = bacaan180;
+                    diputar = true;
+                    logAI(`${prefix} Orientasi 180 derajat lebih cocok dengan desain (${(bacaan180.cocok * 100).toFixed(0)}%). Dipakai.`);
+                } else {
+                    // Kembalikan ke orientasi semula dan pakai bacaan pertama.
+                    cv.rotate(finalWarpedMat, finalWarpedMat, cv.ROTATE_180);
+                    cv.imshow('result-canvas', finalWarpedMat);
+                    if (bacaan) {
+                        logAI(`${prefix} Rotasi tidak memperbaiki kecocokan. Orientasi asli dipertahankan.`);
+                        bacaan = up_readSheet(finalWarpedMat, null, false) || bacaan;
+                    }
                 }
             }
-            if (isSuccess) logAI(`${prefix} Selesai. Ambang arsiran lembar ini: ${engFillThreshold.toFixed(2)}.`);
+
+            const isSuccess = !!bacaan;
+            if (isSuccess) {
+                up_commitReading(bacaan, finalWarpedMat, prefix);
+                logAI(`${prefix} Selesai. Ambang arsiran lembar ini: ${bacaan.threshold.toFixed(2)}, `
+                    + `kecocokan desain ${(bacaan.cocok * 100).toFixed(0)}%${diputar ? ' (lembar diputar 180 derajat)' : ''}.`);
+            } else if (!batchMode) {
+                showCustomAlert("Diagnostik Pemindaian:\nKisi bubble tidak dapat dikunci pada gambar ini. Gambar hasil pelurusan tetap ditampilkan agar dapat diperiksa.");
+            }
             return isSuccess;
         } catch (err) {
             logAI(err.message, true);
@@ -3291,18 +3425,18 @@
             return;
         }
         batchImportActive = false;
-        resetUI(); 
-        isProcessing = true; 
-        closeModal('upload-choice-modal'); 
-        
+        resetUI();
+        isProcessing = true;
+        closeModal('upload-choice-modal');
+
         const reader = new FileReader();
         reader.onload = (ev) => {
             const img = new Image(); img.onload = () => {
-                let scale = Math.min(2000 / Math.max(img.width, img.height), 1.0); 
+                let scale = Math.min(2000 / Math.max(img.width, img.height), 1.0);
                 hiddenCanvas.width = img.width * scale; hiddenCanvas.height = img.height * scale;
                 hiddenCanvas.getContext('2d').drawImage(img, 0, 0, hiddenCanvas.width, hiddenCanvas.height);
                 document.getElementById('loader-overlay').classList.remove('hidden');
-                setTimeout(() => runUploadPipeline(hiddenCanvas), 100); 
+                setTimeout(() => runUploadPipeline(hiddenCanvas), 100);
             }; img.src = ev.target.result;
         }; reader.readAsDataURL(file);
     }
@@ -3908,7 +4042,7 @@
     });
 
     document.getElementById('result-table-body').addEventListener('click', e => {
-        let btn = e.target.closest('.btn-delete'); if (btn) showDeleteConfirm(btn.getAttribute('data-record-id')); 
+        let btn = e.target.closest('.btn-delete'); if (btn) showDeleteConfirm(btn.getAttribute('data-record-id'));
     });
 
     document.getElementById('result-table-body').addEventListener('input', e => {
@@ -3958,11 +4092,11 @@
         document.getElementById('modal-name').value = data.name;
         document.getElementById('modal-kelas').value = data.kelas;
         document.getElementById('modal-peserta').value = data.peserta;
-        document.getElementById('modal-benar').innerText = data.trueCount; 
-        document.getElementById('modal-salah').innerText = data.falseCount; 
-        document.getElementById('modal-kosong').innerText = data.emptyCount; 
-        
-        const actionsDiv = document.getElementById('modal-actions'); 
+        document.getElementById('modal-benar').innerText = data.trueCount;
+        document.getElementById('modal-salah').innerText = data.falseCount;
+        document.getElementById('modal-kosong').innerText = data.emptyCount;
+
+        const actionsDiv = document.getElementById('modal-actions');
         const modalTitle = document.getElementById('modal-title');
         actionsDiv.innerHTML = '';
 
@@ -3987,38 +4121,38 @@
         if (isDuplicate) {
             pendingUpdateData = data; pendingUpdateIndex = index;
             modalTitle.innerText = "Data Peserta Sudah Tersedia"; modalTitle.classList.replace('text-emerald-600', 'text-yellow-600');
-            
+
             let btnCancel = document.createElement('button'); btnCancel.className = "px-5 py-2.5 bg-slate-100 font-bold text-slate-600 rounded-lg hover:bg-slate-200 transition"; btnCancel.innerText = "Batal"; btnCancel.onclick = () => closeModal('result-modal');
             let btnUpdate = document.createElement('button'); btnUpdate.className = "px-5 py-2.5 bg-yellow-500 font-bold text-white rounded-lg hover:bg-yellow-600 transition flex-1"; btnUpdate.innerText = "Perbarui Data";
-            btnUpdate.onclick = () => { 
-                if (pendingUpdateIndex !== -1 && pendingUpdateData) { 
+            btnUpdate.onclick = () => {
+                if (pendingUpdateIndex !== -1 && pendingUpdateData) {
                     let updated = normalizeStoredResultRow(getUpdatedData(), pendingUpdateIndex);
                     updated.recordId = resultData[pendingUpdateIndex].recordId;
                     updated.id = resultData[pendingUpdateIndex].id;
-                    resultData[pendingUpdateIndex] = updated; 
-                    updateTable(); 
-                    closeModal('result-modal'); 
-                } 
+                    resultData[pendingUpdateIndex] = updated;
+                    updateTable();
+                    closeModal('result-modal');
+                }
             };
-            
+
             actionsDiv.appendChild(btnDownload);
-            actionsDiv.appendChild(btnCancel); 
+            actionsDiv.appendChild(btnCancel);
             actionsDiv.appendChild(btnUpdate);
         } else {
             modalTitle.innerText = "Hasil Pemindaian Tersimpan"; modalTitle.classList.replace('text-yellow-600', 'text-emerald-600');
-            
-            let btnClose = document.createElement('button'); btnClose.className = "px-6 py-3 bg-emerald-600 font-bold text-white rounded-lg hover:bg-emerald-700 flex-1 text-center transition shadow-md"; btnClose.innerText = "Simpan dan Lanjutkan"; 
-            btnClose.onclick = () => { 
+
+            let btnClose = document.createElement('button'); btnClose.className = "px-6 py-3 bg-emerald-600 font-bold text-white rounded-lg hover:bg-emerald-700 flex-1 text-center transition shadow-md"; btnClose.innerText = "Simpan dan Lanjutkan";
+            btnClose.onclick = () => {
                 let updated = normalizeStoredResultRow(getUpdatedData());
                 let idx = resultData.findIndex(d => d.recordId === updated.recordId);
-                if (idx !== -1) resultData[idx] = updated; 
+                if (idx !== -1) resultData[idx] = updated;
                 updateTable();
-                closeModal('result-modal'); 
+                closeModal('result-modal');
             };
-            
+
             actionsDiv.appendChild(btnDownload);
             actionsDiv.appendChild(btnClose);
-        } 
+        }
         openModal('result-modal');
     }
 
@@ -4083,6 +4217,10 @@
         getThresholdConfig: () => deepCopy(BUBBLE_THRESHOLD_BASE),
         regradeResults: (opts) => regradeStoredResults(opts || {}),
         getResults: () => deepCopy(resultData),
+        // dipakai oleh berkas uji untuk memeriksa keputusan orientasi
+        _orientasi: { perluCoba180: eng_perluCoba180, pilih180: eng_pilih180 },
+        _kamera: { gerbangTajam: cam_hitungGerbangTajam, paksaTangkapMs: CAM_FORCE_CAPTURE_MS,
+                   frameStabil: STABLE_FRAMES_TO_CAPTURE, burst: CAM_BURST_FRAMES },
         getEngineState: () => ({ fillThreshold: engFillThreshold, gridQuality: engLastQuality,
             lattice: engLastLattice ? { ...engLastLattice } : null,
             affine: engLastAffine ? { cx: [...engLastAffine.cx], cy: [...engLastAffine.cy], n: engLastAffine.n } : null })
