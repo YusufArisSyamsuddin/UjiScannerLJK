@@ -618,7 +618,7 @@
     // diturunkan: getaran sisa sudah ditangani dengan memilih frame TERTAJAM saat
     // menangkap. Hasilnya: menunggu diam ~0,23 detik, bukan ~0,45 detik.
     const TRACK_INTERVAL_MS = 33;
-    const STABLE_FRAMES_TO_CAPTURE = 7;
+    const STABLE_FRAMES_TO_CAPTURE = 5;
     const MIN_CONFIDENCE = 0.90;
     // Ambang ketajaman MENYESUAIKAN DIRI dengan kamera perangkat. Nilai varian
     // Laplacian sangat berbeda antar HP dan antar resolusi, sehingga satu angka
@@ -636,7 +636,7 @@
     // Getaran tangan membuat sebagian frame kabur; kekaburan itulah penyebab utama
     // salah baca arsiran pada mode kamera, bukan algoritmanya.
     const CAM_BURST_FRAMES = 3;
-    const CAM_BURST_GAP_MS = 60;
+    const CAM_BURST_GAP_MS = 35;
     // Resolusi tangkapan: makin banyak piksel pada kertas, makin tegas tepi bubble
     // dan kotak fiducial. Pelacakan langsung TETAP di TRACK_W supaya tetap ringan.
     const CAM_CAPTURE_IDEAL_W = 1920;
@@ -1122,7 +1122,10 @@
         PITCH_COARSE: 25,
         PITCH_FINE: 13,
         CELL_MATCH_R: 0.45,       // jarak maksimum sel desain ke bubble tercetak
-        SECTION_MATCH_MIN: 0.55,  // di bawah ini, blok dianggap tidak ada di kertas
+        SECTION_MATCH_MIN: 0.55,
+        // Kecocokan blok jawaban yang sudah cukup meyakinkan untuk berhenti
+        // mencoba frame lain. Di atas angka ini kisi terbukti terpasang tepat.
+        CAM_GOOD_MATCH: 0.90,  // di bawah ini, blok dianggap tidak ada di kertas
         MAX_HYPOTHESES: 8,
         SCORE_SCALE: 0.5,         // skala warp saat menilai hipotesis (ringan)
         CONF_GOOD: 0.88,          // berhenti lebih awal bila sudah sangat baik
@@ -2490,9 +2493,11 @@
 
     function cam_smoothFids(prevFids, currFids, alpha = 0.7) {
         if (!prevFids) return currFids;
-        let out = {};
-        for (let k of Object.keys(currFids)) {
-            out[k] = cam_smoothPoint(prevFids[k], currFids[k], alpha);
+        const out = {};
+        for (const k of Object.keys(currFids)) {
+            // Kotak yang baru saja terkunci belum punya riwayat - pakai apa adanya,
+            // jangan diratakan dengan nilai kosong (menghasilkan NaN).
+            out[k] = prevFids[k] ? cam_smoothPoint(prevFids[k], currFids[k], alpha) : currFids[k];
         }
         return out;
     }
@@ -2543,16 +2548,64 @@
         return best;
     }
 
-    function cam_executeFastFiducialTracker(grayMat, lastFids, pad) {
-        let fids = {};
-        let keys = ['TL', 'ML', 'BL', 'TR', 'MR', 'BR'];
-        for(let k of keys) {
-            if(!lastFids[k]) return null;
-            let pt = cam_findSolidBlackBoxInROI(grayMat, lastFids[k].x, lastFids[k].y, pad);
-            if(!pt) return null;
-            fids[k] = pt;
+    const CAM_FID_KEYS = ['TL', 'TR', 'ML', 'MR', 'BL', 'BR'];
+
+    // Kunci tiap kotak SECARA TERPISAH. Kotak yang ketemu langsung terkunci dan
+    // ditampilkan hijau, yang belum tetap dicari - persis seperti yang Anda
+    // gambarkan. Hasilnya juga jadi bahan untuk menebak kotak yang tersisa.
+    function cam_trackFiducials(grayMat, refFids, pad) {
+        const found = {};
+        let n = 0;
+        CAM_FID_KEYS.forEach(k => {
+            if (!refFids || !refFids[k]) return;
+            const pt = cam_findSolidBlackBoxInROI(grayMat, refFids[k].x, refFids[k].y, pad);
+            if (pt) { found[k] = pt; n++; }
+        });
+        return { found, n, ditebak: 0 };
+    }
+
+    // Koordinat NOMINAL keenam kotak pada lembar (sistem koordinat hasil warp).
+    function cam_nominalFids() {
+        const W = getWarpWidth(), H = getWarpHeight(), S = getSplitRows() * GRID_SIZE;
+        return { TL: [0, 0], TR: [W, 0], ML: [0, S], MR: [W, S], BL: [0, H], BR: [W, H] };
+    }
+
+    // Padankan koordinat nominal -> koordinat citra dengan affine kuadrat terkecil.
+    // Tiga kotak yang sudah terkunci sudah cukup untuk menentukan letak sisanya.
+    function cam_fitAffine2D(src, dst) {
+        let Suu = 0, Suv = 0, Su = 0, Svv = 0, Sv = 0, Sn = 0;
+        let Sux = 0, Svx = 0, Sx = 0, Suy = 0, Svy = 0, Sy = 0;
+        for (let i = 0; i < src.length; i++) {
+            const u = src[i][0], v = src[i][1], x = dst[i][0], y = dst[i][1];
+            Suu += u * u; Suv += u * v; Su += u; Svv += v * v; Sv += v; Sn += 1;
+            Sux += u * x; Svx += v * x; Sx += x;
+            Suy += u * y; Svy += v * y; Sy += y;
         }
-        return fids;
+        const M = [[Suu, Suv, Su], [Suv, Svv, Sv], [Su, Sv, Sn]];
+        const cx = eng_solve3(M, [Sux, Svx, Sx]);
+        const cy = eng_solve3(M, [Suy, Svy, Sy]);
+        return (cx && cy) ? { cx, cy } : null;
+    }
+
+    // Lengkapi kotak yang belum terkunci: letaknya diramalkan dari yang sudah
+    // terkunci, lalu dicari ulang secara lokal di sekitar ramalan itu.
+    function cam_lengkapiFiducial(grayMat, hasil, pad) {
+        if (!hasil || hasil.n >= 6 || hasil.n < 3) return hasil;
+        const NOM = cam_nominalFids();
+        const ada = CAM_FID_KEYS.filter(k => hasil.found[k]);
+        const A = cam_fitAffine2D(ada.map(k => NOM[k]), ada.map(k => [hasil.found[k].x, hasil.found[k].y]));
+        if (!A) return hasil;
+        const out = { found: { ...hasil.found }, n: hasil.n, ditebak: 0, tebakan: {} };
+        CAM_FID_KEYS.forEach(k => {
+            if (out.found[k]) return;
+            const u = NOM[k][0], v = NOM[k][1];
+            const px = A.cx[0] * u + A.cx[1] * v + A.cx[2];
+            const py = A.cy[0] * u + A.cy[1] * v + A.cy[2];
+            const pt = grayMat ? cam_findSolidBlackBoxInROI(grayMat, px, py, pad || 26) : null;
+            if (pt) { out.found[k] = pt; out.n++; }
+            else { out.found[k] = { x: px, y: py }; out.ditebak++; out.tebakan[k] = true; }
+        });
+        return out;
     }
 
     function cam_detectPaperRegionFallback(grayMat) {
@@ -2693,8 +2746,11 @@
         return calon.ragu < juara.ragu;
     }
 
-    function cam_bacaanSempurna(b) {
-        return !!b && b.soal > 0 && b.tegas === b.soal && b.cocokJawab >= ENG.SECTION_MATCH_MIN;
+    // Cukup baik untuk berhenti: kisi desain terpasang tepat di atas bubble
+    // tercetak. Nomor yang dikosongkan siswa TIDAK dihitung sebagai kekurangan -
+    // itu urusan siswa, bukan urusan pemindai.
+    function cam_bacaanCukup(b) {
+        return !!b && b.soal > 0 && b.cocokJawab >= ENG.CAM_GOOD_MATCH;
     }
 
     function cam_commitReading(reading, warpedMat) {
@@ -2849,7 +2905,7 @@
                 } else {
                     got.warped.delete();
                 }
-                if (cam_bacaanSempurna(best.reading)) break;
+                if (cam_bacaanCukup(best.reading)) break;
                 logAI(`${label} ${got.reading.tegas}/${got.reading.soal} jawaban terbaca tegas`
                     + ` (kecocokan blok jawaban ${(got.reading.cocokJawab * 100).toFixed(0)}%). Mencoba frame berikutnya...`);
             }
@@ -3015,49 +3071,63 @@
                         initialFids[k] = { x: uiGuidePts[k].x * scale, y: uiGuidePts[k].y * scale };
                     }
 
+                    // Tiap kotak dikunci sendiri-sendiri. Yang sudah ketemu langsung
+                    // terkunci; yang belum terus dicari. Begitu minimal tiga terkunci,
+                    // letak sisanya diramalkan dari geometri lembar lalu dicari lokal -
+                    // inilah yang membuat penguncian terasa langsung "nyantol".
+                    let hasil = null;
                     if (camLastFids && camLostFrames < 9) {
-                        fids = cam_executeFastFiducialTracker(gray, camLastFids, 30);
+                        hasil = cam_trackFiducials(gray, camLastFids, 30);
                     }
-
-                    if (!fids) {
-                        fids = cam_executeFastFiducialTracker(gray, initialFids, 45);
+                    if (!hasil || hasil.n < 6) {
+                        const dariPanduan = cam_trackFiducials(gray, initialFids, 45);
+                        if (!hasil || dariPanduan.n > hasil.n) hasil = dariPanduan;
                     }
-
-                    if (!fids && camLostFrames > 5) {
-                        let paperPts = cam_detectPaperRegionFallback(gray);
+                    if (hasil && hasil.n < 3 && camLostFrames > 5) {
+                        const paperPts = cam_detectPaperRegionFallback(gray);
                         if (paperPts) {
-                            let paperQuad = { TL: paperPts[0], TR: paperPts[1], BR: paperPts[2], BL: paperPts[3] };
-                            let estFids = {
-                                TL: paperQuad.TL,
-                                TR: paperQuad.TR,
-                                BR: paperQuad.BR,
-                                BL: paperQuad.BL,
+                            const paperQuad = { TL: paperPts[0], TR: paperPts[1], BR: paperPts[2], BL: paperPts[3] };
+                            const estFids = {
+                                TL: paperQuad.TL, TR: paperQuad.TR, BR: paperQuad.BR, BL: paperQuad.BL,
                                 ML: interpolateQuadPoint(paperQuad, getLeftMiddleGuideRatio(), getMiddleGuideRatio()),
                                 MR: interpolateQuadPoint(paperQuad, getRightMiddleGuideRatio(), getMiddleGuideRatio())
                             };
-                            fids = cam_executeFastFiducialTracker(gray, estFids, 40);
+                            const dariKertas = cam_trackFiducials(gray, estFids, 40);
+                            if (dariKertas.n > hasil.n) hasil = dariKertas;
                         }
                     }
+                    if (hasil && hasil.n >= 3 && hasil.n < 6) hasil = cam_lengkapiFiducial(gray, hasil, 26);
+                    const terkunci = hasil ? hasil.n : 0;       // yang BENAR-BENAR ketemu
+                    const kunciTampil = {};
+                    if (hasil) CAM_FID_KEYS.forEach(k => {
+                        if (hasil.found[k] && !(hasil.tebakan && hasil.tebakan[k])) kunciTampil[k] = hasil.found[k];
+                    });
+                    // Lima kotak asli sudah cukup: yang keenam diramalkan, dan saat
+                    // menangkap nanti keenamnya tetap dicari ulang dari awal pada
+                    // resolusi penuh, jadi ketepatannya tidak berkurang.
+                    if (hasil && hasil.n + (hasil.ditebak || 0) === 6 && terkunci >= 5) fids = hasil.found;
 
                     let ctx = overlayCanvas.getContext('2d');
                     ctx.clearRect(0, 0, cw, ch);
 
-                    let boxSize = Math.max(40, cw * 0.08);
-                    ctx.lineWidth = 3;
-                    ctx.setLineDash([10, 5]);
-
-                    if (fids && camStableFrames > 0) {
-                        ctx.strokeStyle = "rgba(16, 185, 129, 0.2)";
-                    } else if (!fids && camLostFrames > 0) {
-                        ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-                    } else {
-                        ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-                    }
-
-                    ctx.strokeRect(uiGuidePts.TL.x - boxSize/2, uiGuidePts.TL.y - boxSize/2, boxSize, boxSize);
-                    ctx.strokeRect(uiGuidePts.TR.x - boxSize/2, uiGuidePts.TR.y - boxSize/2, boxSize, boxSize);
-                    ctx.strokeRect(uiGuidePts.BL.x - boxSize/2, uiGuidePts.BL.y - boxSize/2, boxSize, boxSize);
-                    ctx.strokeRect(uiGuidePts.BR.x - boxSize/2, uiGuidePts.BR.y - boxSize/2, boxSize, boxSize);
+                    // Keenam kotak digambar - termasuk dua kotak tengah yang dulu tidak
+                    // pernah ditampilkan. Kotak yang sudah terkunci menyala hijau penuh,
+                    // yang belum tetap putus-putus, sehingga guru langsung tahu sudut
+                    // mana yang perlu dibetulkan.
+                    const boxSize = Math.max(34, cw * 0.075);
+                    CAM_FID_KEYS.forEach(k => {
+                        const g = uiGuidePts[k];
+                        if (!g) return;
+                        const locked = !!kunciTampil[k];
+                        ctx.setLineDash(locked ? [] : [9, 6]);
+                        ctx.lineWidth = locked ? 4 : 2.5;
+                        ctx.strokeStyle = locked ? '#10b981' : 'rgba(255, 255, 255, 0.85)';
+                        ctx.strokeRect(g.x - boxSize / 2, g.y - boxSize / 2, boxSize, boxSize);
+                        if (locked) {
+                            ctx.fillStyle = 'rgba(16, 185, 129, 0.22)';
+                            ctx.fillRect(g.x - boxSize / 2, g.y - boxSize / 2, boxSize, boxSize);
+                        }
+                    });
                     ctx.setLineDash([]);
 
                     if (fids) {
@@ -3090,6 +3160,7 @@
                         else if (!okMove) { pesan = 'TAHAN, JANGAN BERGERAK'; warna = 'text-amber-500'; }
                         else { pesan = `STABIL ${stabPercent}%`; warna = 'text-emerald-500'; }
                         scanStatus.innerHTML = `<span class="${warna} font-bold">${pesan}</span>`
+                            + `<span class="block text-[10px] font-normal text-emerald-600">KOTAK TERKUNCI ${terkunci}/6</span>`
                             + `<span class="block text-[10px] font-normal text-slate-400">ketuk layar untuk menangkap sekarang</span>`;
 
                         ctx.beginPath();
@@ -3115,7 +3186,8 @@
                         camLostFrames++;
                         camStableFrames = Math.max(0, camStableFrames - 1);
                         camLockedSince = 0;
-                        scanStatus.innerHTML = `<span class="text-blue-500 font-bold">MENCARI KOTAK SUDUT...</span>`;
+                        scanStatus.innerHTML = `<span class="text-blue-500 font-bold">MENCARI KOTAK SUDUT...</span>`
+                            + `<span class="block text-[10px] font-normal text-slate-400">KOTAK TERKUNCI ${terkunci}/6</span>`;
                     }
                 } catch (err) { console.error(err); }
                 finally { if(smallMat) smallMat.delete(); if(gray) gray.delete(); }
@@ -4310,7 +4382,8 @@
         _orientasi: { perluCoba180: eng_perluCoba180, pilih180: eng_pilih180 },
         _kamera: { gerbangTajam: cam_hitungGerbangTajam, paksaTangkapMs: CAM_FORCE_CAPTURE_MS,
                    frameStabil: STABLE_FRAMES_TO_CAPTURE, burst: CAM_BURST_FRAMES,
-                   ringkas: cam_ringkasBacaan, lebihBaik: cam_bacaanLebihBaik, sempurna: cam_bacaanSempurna },
+                   ringkas: cam_ringkasBacaan, lebihBaik: cam_bacaanLebihBaik, cukup: cam_bacaanCukup,
+                   lacak: cam_lengkapiFiducial },
         getEngineState: () => ({ fillThreshold: engFillThreshold, gridQuality: engLastQuality,
             lattice: engLastLattice ? { ...engLastLattice } : null,
             affine: engLastAffine ? { cx: [...engLastAffine.cx], cy: [...engLastAffine.cy], n: engLastAffine.n } : null })
