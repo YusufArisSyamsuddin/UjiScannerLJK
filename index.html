@@ -14,7 +14,32 @@
         .checkerboard { background-image: linear-gradient(45deg, #1e293b 25%, transparent 25%, transparent 75%, #1e293b 75%, #1e293b), linear-gradient(45deg, #1e293b 25%, transparent 25%, transparent 75%, #1e293b 75%, #1e293b); background-size: 20px 20px; background-position: 0 0, 10px 10px; }
         .modal { transition: opacity 0.25s ease; }
         body.modal-active { overflow: hidden; }
-        #video-container { position: relative; width: 100%; height: 100%; min-height: 500px; display: flex; align-items: center; justify-content: center; overflow: hidden; border-radius: 0.5rem; }
+        /* Tinggi pratinjau MENGIKUTI layar, tidak lagi dipaku 500 px. Paku itulah
+           yang mendorong tombol Kamera/Unggah keluar layar pada ponsel. */
+        #video-container {
+            position: relative; width: 100%; display: flex; align-items: center;
+            justify-content: center; overflow: hidden; border-radius: 0.5rem;
+            height: clamp(220px, 46vh, 430px); min-height: 0;
+            /* JANGAN ikut melar mengikuti tinggi baris kisi. Kelas flex-1 membuat
+               kotak ini tumbuh melewati tinggi yang sudah ditetapkan, sehingga
+               tombol di bawahnya terdorong keluar layar. */
+            flex: 0 0 auto;
+        }
+        @media (min-width: 1024px) {
+            /* Di layar lebar pun tingginya tetap mengikuti layar, supaya kartu
+               Area Pindai beserta tombolnya muat tanpa digulir. */
+            #video-container { height: clamp(300px, 52vh, 560px); min-height: 0; }
+        }
+        /* Di dalam pembungkus, kepala halaman ini mengulang bilah atas di luar.
+           Menyembunyikannya mengembalikan ~90 px ke area pindai. */
+        html.tersemat #app-header { display: none; }
+        html.tersemat .app-wrap { padding-top: 0.5rem; }
+
+        /* Sasaran sentuh minimum 44 px - anjuran Apple maupun Android. */
+        @media (pointer: coarse) {
+            button, label.cursor-pointer, summary { min-height: 40px; }
+            #btn-camera, #btn-export, #btn-clear-results, #btn-regrade { min-height: 44px; }
+        }
         #video, #overlay-canvas, #result-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; }
         #result-canvas { z-index: 40; }
         #overlay-canvas { z-index: 30; }
@@ -23,91 +48,114 @@
 </head>
 <body class="bg-slate-100 text-slate-800 font-sans min-h-screen flex flex-col">
 
-<div class="max-w-7xl mx-auto p-3 md:p-6 flex-1 w-full">
-    <header class="bg-gradient-to-r from-slate-950 via-slate-900 to-emerald-950 text-white rounded-xl md:rounded-2xl p-4 md:p-6 shadow-xl mb-4 md:mb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-3 md:gap-4 border border-slate-800">
-        <div>
-            <h1 class="text-xl md:text-2xl font-bold tracking-tight text-emerald-300">LJK Scanner AI-TRACK</h1>
-            <p class="text-xs md:text-sm text-slate-300 mt-1">Mesin pemindaian adaptif dengan pelacakan fiducial presisi</p>
-        </div>
-        <div class="flex items-center gap-2">
-            <div id="cv-status" class="flex items-center gap-2 bg-slate-800 px-3 md:px-4 py-2 rounded-lg text-xs md:text-sm font-medium border border-slate-700">
-                <div class="w-3 h-3 rounded-full bg-yellow-500 animate-pulse"></div> Engine OpenCV sedang dimuat...
+<div class="app-wrap max-w-7xl mx-auto p-2.5 md:p-4 flex-1 w-full">
+    <header id="app-header" class="bg-gradient-to-r from-slate-950 via-slate-900 to-emerald-950 text-white rounded-xl p-3 md:p-4 shadow-lg mb-4 flex items-center justify-between gap-3 border border-slate-800">
+        <div class="flex items-center gap-2.5 min-w-0">
+            <svg class="w-6 h-6 shrink-0 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7V5a1 1 0 011-1h2M4 17v2a1 1 0 001 1h2m10-16h2a1 1 0 011 1v2m-3 13h2a1 1 0 001-1v-2M7 12h10"/></svg>
+            <div class="min-w-0">
+                <h1 class="text-base md:text-lg font-bold tracking-tight text-emerald-300 truncate">LJK Scanner</h1>
+                <p class="text-[10px] md:text-xs text-slate-400 truncate">Koreksi LJK otomatis</p>
             </div>
-            <label class="flex items-center gap-2 bg-slate-800 px-3 py-2 rounded-lg text-[10px] md:text-xs font-semibold border border-slate-700 cursor-pointer select-none text-slate-300" title="Rekam proporsi arsiran tiap bubble beserta alasan keputusan ke console browser (F12), berikut ambang otomatis dan mutu kisi lembar ini. Non-aktif secara default.">
-                <input type="checkbox" id="chk-diagnostic-mode" class="accent-emerald-500">
-                Mode Diagnostik
-            </label>
+        </div>
+        <div id="cv-status" class="flex items-center gap-2 bg-slate-800/80 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border border-slate-700 shrink-0">
+            <div class="w-2 h-2 rounded-full bg-yellow-500 animate-pulse"></div> <span class="hidden sm:inline">Memuat</span>
         </div>
     </header>
 
-    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-        <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col">
-            <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 text-slate-800 flex justify-between items-center">
-                <span>Status Pemindaian</span>
-                <span class="bg-emerald-100 text-emerald-700 text-[10px] px-2 py-1 rounded-full font-bold uppercase tracking-wider">AI-TRACK v67.1</span>
-            </h2>
-            <div class="bg-black text-green-400 font-mono text-[10px] p-3 rounded-lg mb-4 h-56 overflow-y-auto shadow-inner leading-relaxed" id="ai-log">
-                > Sistem siap. Menunggu sumber pemindaian...<br>
-                > Kamera: panduan ROI dan pelacakan dinamis aktif.<br>
-                > Kamera: pengunci ketajaman dan smoothing adaptif aktif.<br>
-            </div>
-            <div>
-                <label id="lbl-answer-key" class="block text-xs font-bold mb-1 text-slate-700 uppercase">Panel Kunci Jawaban</label>
-                <p id="answer-key-summary" class="mb-3 text-[11px] font-medium leading-relaxed text-slate-500">Belum ada blok soal aktif pada desain.</p>
-                <div id="answer-key-panels" class="space-y-3 mb-1"></div>
-                <button id="btn-regrade" class="mt-3 w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase tracking-wide py-2.5 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed">
-                    Terapkan Kunci &amp; Hitung Ulang Rekap
-                </button>
-                <p id="regrade-hint" class="mt-2 text-[10px] leading-relaxed text-slate-500"></p>
-            </div>
-        </div>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
 
-        <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 col-span-1 lg:col-span-2 flex flex-col relative">
-            <h2 class="font-bold text-lg border-b border-slate-100 pb-3 mb-4 flex justify-between items-center text-slate-800 min-h-[3rem]">
-                <span class="whitespace-nowrap">Area Pemindaian</span>
-                <span id="scan-status" class="text-[10px] md:text-xs font-bold px-3 py-1 bg-slate-100 text-slate-500 rounded-full border border-slate-200 max-w-[180px] md:max-w-xs truncate text-center">Menunggu sumber scan...</span>
+        <!-- AREA PINDAI - pandangan utama, tampil paling atas di layar kecil -->
+        <section class="order-1 lg:order-2 bg-white p-3 md:p-4 rounded-xl shadow-sm border border-slate-200 col-span-1 lg:col-span-2 flex flex-col">
+            <h2 class="font-bold text-base text-slate-800 mb-2 flex items-center gap-2">
+                <svg class="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7V5a1 1 0 011-1h2M4 17v2a1 1 0 001 1h2m10-16h2a1 1 0 011 1v2m-3 13h2a1 1 0 001-1v-2M7 12h10"/></svg>
+                Area Pindai
             </h2>
-            <div id="video-container" class="relative w-full bg-[#0f172a] rounded-lg overflow-hidden flex-1 min-h-[500px] flex items-center justify-center checkerboard">
-                <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 leading-relaxed absolute z-0">
-                    <svg class="w-16 h-16 mx-auto mb-3 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
-                    Pilih mode kamera langsung atau unggah gambar LJK.<br>
-                    <span class="text-xs text-emerald-400">Pastikan seluruh bidang kertas terlihat utuh dan tegak.</span>
+
+            <div id="video-container" class="relative w-full bg-[#0f172a] rounded-lg overflow-hidden flex-1 min-h-[300px] md:min-h-[440px] flex items-center justify-center checkerboard">
+
+                <!-- Lapisan status: melayang di atas pratinjau, tinggi tetap -->
+                <div id="scan-hud" class="absolute top-2 left-2 right-2 z-30 flex items-center gap-2 pointer-events-none">
+                    <span id="scan-status" class="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[11px] font-bold bg-slate-900/80 text-slate-200 backdrop-blur-sm border border-white/10 whitespace-nowrap overflow-hidden">Siap</span>
+                    <span id="scan-lock" class="hidden items-center gap-1 h-7 px-2.5 rounded-full text-[11px] font-bold bg-slate-900/80 text-emerald-300 backdrop-blur-sm border border-white/10 whitespace-nowrap">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                        <span id="scan-lock-text">0/6</span>
+                    </span>
                 </div>
+
+                <div id="placeholder-text" class="text-slate-400 text-sm font-medium text-center px-4 absolute z-0">
+                    <svg class="w-14 h-14 mx-auto mb-2 opacity-20" fill="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm2 2v14h14V5H5zm2 2h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"></path></svg>
+                    Pilih Kamera atau Unggah
+                    <span class="block text-xs text-emerald-400 mt-0.5">Pastikan 6 kotak hitam terlihat utuh</span>
+                </div>
+
                 <video id="video" playsinline autoplay muted class="hidden"></video>
                 <canvas id="overlay-canvas" class="hidden pointer-events-none"></canvas>
                 <canvas id="result-canvas" class="hidden z-40 bg-white shadow-xl"></canvas>
 
                 <div id="loader-overlay" class="absolute inset-0 bg-slate-900/95 hidden flex-col justify-center items-center z-50 backdrop-blur-sm">
-                    <div class="loader mb-4"></div>
-                    <p id="loader-text" class="text-xs font-bold text-emerald-400 tracking-widest animate-pulse uppercase text-center leading-relaxed">
-                        Menganalisis lembar LJK<br><span class="text-[9px] text-slate-400">Menjalankan pipeline pemindaian presisi...</span>
-                    </p>
+                    <div class="loader mb-3"></div>
+                    <p id="loader-text" class="text-xs font-bold text-emerald-400 tracking-widest uppercase">Menganalisis</p>
                 </div>
             </div>
             <canvas id="hidden-canvas" class="hidden"></canvas>
 
-            <div class="flex flex-row gap-4 mt-5">
-                <button id="btn-camera" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-3 rounded-lg font-bold transition shadow-md flex justify-center items-center gap-2 text-sm sm:text-base">
-                    <svg class="w-5 h-5 hidden sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
-                    Live Scan Kamera
+            <!-- Petunjuk bertinggi TETAP: tidak pernah menggeser tata letak -->
+            <p id="scan-hint" class="h-4 mt-1.5 text-[10px] text-slate-400 text-center truncate">&nbsp;</p>
+
+            <div class="flex flex-row gap-2 mt-2">
+                <button id="btn-camera" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2.5 rounded-lg font-bold transition shadow-sm flex justify-center items-center gap-2 text-sm">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                    Kamera
                 </button>
-                <button onclick="openModal('upload-choice-modal')" class="flex-1 bg-slate-800 hover:bg-slate-900 text-white px-4 py-3 rounded-lg font-bold transition shadow-md flex justify-center items-center gap-2 text-sm sm:text-base">
-                    <svg class="w-5 h-5 hidden sm:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
-                    Unggah Gambar
+                <button onclick="openModal('upload-choice-modal')" class="flex-1 bg-slate-800 hover:bg-slate-900 text-white px-3 py-2.5 rounded-lg font-bold transition shadow-sm flex justify-center items-center gap-2 text-sm">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+                    Unggah
                 </button>
             </div>
-        </div>
+        </section>
+
+        <!-- PANEL KENDALI -->
+        <section class="order-2 lg:order-1 bg-white p-3 md:p-4 rounded-xl shadow-sm border border-slate-200 col-span-1 h-fit flex flex-col gap-3">
+            <div>
+                <div class="flex items-center justify-between mb-1.5">
+                    <label id="lbl-answer-key" class="text-xs font-bold text-slate-700 uppercase tracking-wide">Kunci Jawaban</label>
+                    <span id="answer-key-summary" class="text-[10px] font-medium text-slate-500 text-right">Desain belum aktif</span>
+                </div>
+                <div id="answer-key-panels" class="space-y-2"></div>
+                <button id="btn-regrade" class="mt-2 w-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase tracking-wide py-2.5 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    Hitung Ulang
+                </button>
+                <p id="regrade-hint" class="mt-1.5 text-[10px] leading-snug text-slate-500"></p>
+            </div>
+
+            <details id="log-box" class="border-t border-slate-100 pt-2.5">
+                <summary class="text-xs font-bold text-slate-700 uppercase tracking-wide cursor-pointer select-none flex items-center justify-between">
+                    <span>Aktivitas</span>
+                    <span class="text-[10px] font-normal text-slate-400">rinci</span>
+                </summary>
+                <div class="bg-slate-950 text-emerald-400 font-mono text-[10px] p-2.5 rounded-lg mt-2 h-32 overflow-y-auto leading-relaxed" id="ai-log">
+                    &gt; Sistem siap.<br>
+                </div>
+                <label class="mt-2 flex items-center gap-2 text-[10px] font-semibold text-slate-500 cursor-pointer select-none" title="Rekam rincian tiap bubble ke console browser (F12).">
+                    <input type="checkbox" id="chk-diagnostic-mode" class="accent-emerald-500">
+                    Mode Diagnostik
+                </label>
+            </details>
+        </section>
     </div>
 
-    <div class="bg-white p-6 rounded-xl shadow-sm border border-slate-200 overflow-hidden">
-        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-4 mb-4 gap-4">
-            <h2 class="font-bold text-xl text-slate-800">Rekap Hasil Pemindaian</h2>
-            <div class="flex flex-wrap gap-2">
-                <button id="btn-clear-results" class="bg-white border border-red-200 text-red-600 hover:bg-red-50 px-5 py-2.5 rounded-lg font-bold text-sm transition shadow-sm flex items-center gap-2">
-                    Hapus
+    <div class="bg-white p-3 md:p-4 rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+        <div class="flex justify-between items-center border-b border-slate-100 pb-2.5 mb-2.5 gap-2">
+            <h2 class="font-bold text-base text-slate-800">Hasil</h2>
+            <div class="flex gap-2 shrink-0">
+                <button id="btn-clear-results" title="Kosongkan seluruh hasil" class="bg-white border border-red-200 text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg font-bold text-xs transition flex items-center gap-1.5">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7M4 7h16"/></svg>
+                    <span class="hidden sm:inline">Kosongkan</span>
                 </button>
-                <button id="btn-export" class="bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-lg font-bold text-sm transition shadow-sm flex items-center gap-2">
-                    Unduh Excel
+                <button id="btn-export" title="Unduh sebagai berkas Excel" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg font-bold text-xs transition shadow-sm flex items-center gap-1.5">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 4v12m0 0l-4-4m4 4l4-4"/></svg>
+                    Excel
                 </button>
             </div>
         </div>
@@ -115,16 +163,16 @@
             <table class="w-full text-left border-collapse whitespace-nowrap min-w-max">
                 <thead>
                     <tr class="bg-slate-50 border-b border-slate-200 text-xs uppercase tracking-wider text-slate-600">
-                        <th class="p-4 font-bold text-center">Aksi</th>
-                        <th class="p-4 font-bold cursor-pointer select-none" data-sort="peserta"><button type="button" class="sort-btn flex items-center gap-2 font-bold">Nomor Peserta <span class="text-[10px] text-slate-400" data-sort-icon="peserta"></span></button></th>
-                        <th class="p-4 font-bold text-slate-900 cursor-pointer select-none" data-sort="name"><button type="button" class="sort-btn flex items-center gap-2 font-bold">Nama Peserta <span class="text-[10px] text-slate-400" data-sort-icon="name"></span></button></th>
-                        <th class="p-4 font-bold cursor-pointer select-none" data-sort="kelas"><button type="button" class="sort-btn flex items-center gap-2 font-bold">Kelas <span class="text-[10px] text-slate-400" data-sort-icon="kelas"></span></button></th>
-                        <th class="p-4 font-bold text-emerald-500">Benar</th>
-                        <th class="p-4 font-bold text-red-500">Salah</th>
-                        <th class="p-4 font-bold text-sky-500 cursor-pointer select-none" data-sort="scoreValue"><button type="button" class="sort-btn flex items-center gap-2 font-bold">Nilai <span class="text-[10px] text-slate-400" data-sort-icon="scoreValue"></span></button></th>
-                        <th class="p-4 font-bold text-emerald-600">Nomor Benar</th>
-                        <th class="p-4 font-bold text-red-600">Nomor Salah</th>
-                        <th class="p-4 font-bold text-slate-700">Jawaban Terdeteksi</th>
+                        <th class="p-2.5 font-bold text-center"><span class="sr-only">Aksi</span><svg class="w-4 h-4 mx-auto text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h.01M12 12h.01M19 12h.01"/></svg></th>
+                        <th class="p-2.5 font-bold cursor-pointer select-none" data-sort="peserta"><button type="button" class="sort-btn flex items-center gap-2 font-bold">No. Peserta <span class="text-[10px] text-slate-400" data-sort-icon="peserta"></span></button></th>
+                        <th class="p-2.5 font-bold text-slate-900 cursor-pointer select-none" data-sort="name"><button type="button" class="sort-btn flex items-center gap-2 font-bold">Nama <span class="text-[10px] text-slate-400" data-sort-icon="name"></span></button></th>
+                        <th class="p-2.5 font-bold cursor-pointer select-none" data-sort="kelas"><button type="button" class="sort-btn flex items-center gap-2 font-bold">Kelas <span class="text-[10px] text-slate-400" data-sort-icon="kelas"></span></button></th>
+                        <th class="p-2.5 font-bold text-emerald-500">Benar</th>
+                        <th class="p-2.5 font-bold text-red-500">Salah</th>
+                        <th class="p-2.5 font-bold text-sky-500 cursor-pointer select-none" data-sort="scoreValue"><button type="button" class="sort-btn flex items-center gap-2 font-bold">Nilai <span class="text-[10px] text-slate-400" data-sort-icon="scoreValue"></span></button></th>
+                        <th class="p-2.5 font-bold text-emerald-600">No. Benar</th>
+                        <th class="p-2.5 font-bold text-red-600">No. Salah</th>
+                        <th class="p-2.5 font-bold text-slate-700">Jawaban</th>
                     </tr>
                 </thead>
                 <tbody id="result-table-body" class="divide-y divide-slate-100 text-sm"></tbody>
@@ -133,44 +181,30 @@
     </div>
 </div>
 
-<footer class="mt-8 bg-slate-900 text-slate-400 pt-10 pb-8 border-t-4 border-emerald-500 rounded-t-[2.5rem] shadow-[0_-10px_30px_rgba(0,0,0,0.1)] w-full">
-    <div class="max-w-4xl mx-auto px-6 text-center flex flex-col items-center gap-5">
-        <div>
-            <h3 class="text-2xl font-black text-white tracking-widest flex items-center justify-center gap-2">
-                <svg class="w-6 h-6 text-emerald-400" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-                LJK SCANNER PRO
-            </h3>
-            <p class="text-sm font-medium mt-2 text-slate-300">Dirancang untuk kebutuhan evaluasi berbasis LJK yang presisi dan praktis</p>
-        </div>
-
-        <div class="bg-slate-800/80 backdrop-blur-sm px-8 py-5 rounded-2xl border border-slate-700/50 shadow-xl transform hover:-translate-y-1 transition duration-300">
-            <p class="font-black text-xl text-emerald-400 tracking-wider">YUSUF ARIS SYAMSUDDIN</p>
-            <div class="flex flex-col sm:flex-row items-center justify-center gap-3 mt-3">
-                <p class="text-xs font-mono bg-slate-900 text-slate-300 px-4 py-1.5 rounded-lg shadow-inner border border-slate-700/50">ID: 0762773674130202</p>
-                <p class="text-xs font-semibold text-slate-300 bg-slate-700/30 px-4 py-1.5 rounded-lg">Guru IPA & Informatika - SMPN 2 Secang</p>
-            </div>
-        </div>
-
-        <div class="w-16 h-1 bg-slate-700 rounded-full my-2"></div>
-        <p class="text-xs font-medium opacity-60 hover:opacity-100 transition-opacity">&copy; 2026 Hak Cipta Dilindungi. Enterprise Stable Version V67.</p>
+<footer class="mt-4 bg-slate-900 text-slate-400 py-4 border-t-2 border-emerald-500 w-full">
+    <div class="max-w-4xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-center gap-x-3 gap-y-1 text-center">
+        <p class="text-xs font-bold text-emerald-400">YUSUF ARIS SYAMSUDDIN</p>
+        <span class="hidden sm:inline text-slate-600">&middot;</span>
+        <p class="text-[11px] text-slate-400">Guru IPA &amp; Informatika, SMPN 2 Secang</p>
+        <span class="hidden sm:inline text-slate-600">&middot;</span>
+        <p class="text-[11px] text-slate-500">&copy; 2026</p>
     </div>
 </footer>
 
 <div id="upload-choice-modal" class="modal opacity-0 pointer-events-none fixed w-full h-full top-0 left-0 flex items-center justify-center z-[110]">
     <div class="modal-overlay absolute w-full h-full bg-slate-900 opacity-75" onclick="closeModal('upload-choice-modal')"></div>
     <div class="modal-container bg-white w-11/12 md:max-w-sm mx-auto rounded-xl shadow-2xl z-50 overflow-hidden text-center p-6 transform transition-all">
-        <h3 class="text-xl font-black text-slate-800 mb-2">Pilih Sumber Gambar LJK</h3>
-        <p class="text-sm text-slate-500 mb-6">Pilih metode pengambilan gambar. Setiap file akan diproses melalui jalur upload dengan kalibrasi fiducial presisi.</p>
+        <h3 class="text-lg font-bold text-slate-800 mb-4">Sumber Gambar</h3>
 
         <div class="flex flex-col gap-3">
             <label class="w-full px-4 py-3.5 bg-emerald-600 text-white rounded-lg font-bold shadow-md hover:bg-emerald-700 hover:shadow-lg transition cursor-pointer flex items-center justify-center gap-3">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path></svg>
-                Ambil Foto dengan Kamera
+                Foto Kamera
                 <input type="file" id="upload-camera" accept="image/*" capture="environment" class="hidden">
             </label>
             <label class="w-full px-4 py-3.5 bg-slate-100 text-slate-700 border border-slate-200 rounded-lg font-bold shadow-sm hover:bg-slate-200 transition cursor-pointer flex items-center justify-center gap-3">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                Pilih Gambar / PDF
+                Gambar / PDF
                 <input type="file" id="upload-gallery" accept="image/*,application/pdf,.pdf" class="hidden">
             </label>
         </div>
@@ -227,7 +261,7 @@
         <svg class="mx-auto mb-4 text-yellow-500 w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
         <h3 class="text-lg font-black text-slate-800 mb-2">Informasi</h3>
         <p id="alert-message" class="text-sm text-slate-600 mb-5 leading-relaxed"></p>
-        <button onclick="closeModal('alert-modal')" class="w-full px-4 py-3 bg-emerald-600 text-white rounded-lg font-bold shadow hover:bg-emerald-700 transition">Tutup Pesan</button>
+        <button onclick="closeModal('alert-modal')" class="w-full px-4 py-3 bg-emerald-600 text-white rounded-lg font-bold shadow hover:bg-emerald-700 transition">Tutup</button>
     </div>
 </div>
 
@@ -236,7 +270,7 @@
     <div class="modal-container bg-white w-11/12 md:max-w-sm mx-auto rounded-xl shadow-2xl z-50 overflow-hidden text-center p-6">
         <svg class="mx-auto mb-4 text-red-500 w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
         <h3 id="confirm-title" class="text-lg font-black text-slate-800 mb-2">Hapus Hasil</h3>
-        <p id="confirm-message" class="text-sm text-slate-600 mb-5">Apakah Anda yakin ingin menghapus hasil pemindaian ini dari tabel rekap?</p>
+        <p id="confirm-message" class="text-sm text-slate-600 mb-5">Hapus hasil ini?</p>
         <div class="flex gap-3 justify-center">
             <button onclick="closeModal('confirm-modal')" class="flex-1 px-4 py-3 bg-slate-100 text-slate-700 rounded-lg font-bold hover:bg-slate-200 transition">Batal</button>
             <button id="btn-confirm-delete" class="flex-1 px-4 py-3 bg-red-600 text-white rounded-lg font-bold shadow hover:bg-red-700 transition">Hapus</button>
@@ -249,7 +283,7 @@
         <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl flex flex-col max-h-[94vh] overflow-hidden">
             <div class="p-3 md:p-4 border-b border-slate-200 flex items-center justify-between gap-3 bg-slate-50">
                 <div class="min-w-0">
-                    <h3 class="font-bold text-slate-800 text-sm truncate">Periksa &amp; Koreksi Jawaban</h3>
+                    <h3 class="font-bold text-slate-800 text-sm truncate">Koreksi Jawaban</h3>
                     <p id="review-subtitle" class="text-[11px] text-slate-500 truncate">-</p>
                 </div>
                 <button id="btn-review-close" class="shrink-0 text-slate-400 hover:text-rose-500 p-2 rounded-lg hover:bg-slate-200 transition">
@@ -257,18 +291,18 @@
                 </button>
             </div>
             <div class="px-3 md:px-4 py-2 border-b border-slate-200 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-600 bg-white">
-                <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-3 rounded-full ring-2 ring-sky-500"></span> Terdeteksi mesin</span>
-                <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-3 rounded-full ring-2 ring-amber-500"></span> Dikoreksi manual</span>
-                <span class="text-slate-400">Ketuk bubble untuk mengganti jawaban; ketuk lagi untuk mengosongkan.</span>
+                <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-3 rounded-full ring-2 ring-sky-500"></span> Otomatis</span>
+                <span class="flex items-center gap-1.5"><span class="inline-block w-3 h-3 rounded-full ring-2 ring-amber-500"></span> Manual</span>
+                <span class="text-slate-400">Ketuk bubble untuk ubah &middot; ketuk lagi untuk kosongkan</span>
             </div>
             <div class="flex-1 overflow-auto bg-slate-100 p-2 md:p-3 custom-scroll">
                 <canvas id="review-canvas" class="mx-auto block max-w-full cursor-pointer rounded-lg shadow-sm bg-white"></canvas>
-                <p id="review-empty" class="hidden text-center text-xs text-slate-500 py-10">Gambar hasil pindai untuk baris ini belum tersimpan. Baris ini berasal dari pemindaian versi lama — pindai ulang sekali saja agar bisa dikoreksi di sini.</p>
+                <p id="review-empty" class="hidden text-center text-xs text-slate-500 py-10">Gambar belum tersimpan. Pindai ulang sekali agar bisa dikoreksi di sini.</p>
             </div>
             <div class="p-3 border-t border-slate-200 flex items-center justify-between gap-2 bg-slate-50">
                 <p id="review-status" class="text-[11px] text-slate-500 truncate">-</p>
                 <div class="flex gap-2 shrink-0">
-                    <button id="btn-review-reset" class="px-3 py-2 text-xs font-semibold rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100 transition">Kembalikan Hasil Mesin</button>
+                    <button id="btn-review-reset" class="px-3 py-2 text-xs font-semibold rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-100 transition">Reset</button>
                     <button id="btn-review-done" class="px-4 py-2 text-xs font-bold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition">Selesai</button>
                 </div>
             </div>
@@ -368,10 +402,10 @@
     };
     const KEY_STORAGE_KEY = 'ljk-suite-answer-keys-v2';
     const SECTION_META = {
-        jawaban_pg: { id: 'jawaban_pg', label: 'Pilihan Ganda', short: 'PG', mode: 'single', placeholder: 'Contoh: ABCDABCD atau A,B,C,D', help: 'Isi 1 huruf per nomor. Huruf yang diterima: A-D.' },
-        jawaban_pgk: { id: 'jawaban_pgk', label: 'Pilihan Ganda Kompleks', short: 'PGK', mode: 'multi', placeholder: 'Contoh: AB, AC, BD, CD', help: 'Pisahkan tiap nomor dengan koma. Tiap nomor dapat berisi lebih dari satu jawaban benar, misalnya AB.' },
-        jawaban_bs: { id: 'jawaban_bs', label: 'Benar / Salah', short: 'BS', mode: 'binary_groups', placeholder: 'Contoh: BBB, BBS, BSS, SSS', help: 'Isi 1 token per nomor. Setiap token berisi rangkaian B/S sesuai jumlah pernyataan pada desain, misalnya BBB atau BBS.' },
-        jawaban_menjodohkan: { id: 'jawaban_menjodohkan', label: 'Menjodohkan', short: 'MJ', mode: 'single_token', placeholder: 'Contoh: A,C,E,B,J', help: 'Pisahkan tiap nomor dengan koma. Nilai mengikuti label opsi yang tampil pada desain.' }
+        jawaban_pg: { id: 'jawaban_pg', label: 'Pilihan Ganda', short: 'PG', mode: 'single', placeholder: 'Contoh: ABCDABCD atau A,B,C,D', help: '1 huruf per nomor (A-D).' },
+        jawaban_pgk: { id: 'jawaban_pgk', label: 'Pilihan Ganda Kompleks', short: 'PGK', mode: 'multi', placeholder: 'Contoh: AB, AC, BD, CD', help: 'Boleh lebih dari satu huruf per nomor (contoh: AB). Pisahkan dengan koma.' },
+        jawaban_bs: { id: 'jawaban_bs', label: 'Benar / Salah', short: 'BS', mode: 'binary_groups', placeholder: 'Contoh: BBB, BBS, BSS, SSS', help: 'Rangkaian B/S per nomor (contoh: BBS). Pisahkan dengan koma.' },
+        jawaban_menjodohkan: { id: 'jawaban_menjodohkan', label: 'Menjodohkan', short: 'MJ', mode: 'single_token', placeholder: 'Contoh: A,C,E,B,J', help: '1 label per nomor sesuai desain. Pisahkan dengan koma.' }
     };
     let paperConfig = { ...DEFAULT_PAPER_CONFIG };
     let bubbleConfig = { ...DEFAULT_BUBBLE_CONFIG };
@@ -493,9 +527,27 @@
         const warpRows = getWarpRows();
         return clampPaperValue(paperConfig.fiducialMiddleRow, DEFAULT_PAPER_CONFIG.fiducialMiddleRow, 1, warpRows - 1);
     }
-    function getMiddleGuideRatio() { return clampFloatValue((paperConfig.fiducialMiddleRow + 1) / Math.max(1, paperConfig.gridRows), 0.67, 0.1, 0.95); }
-    function getLeftMiddleGuideRatio() { return clampFloatValue(paperConfig.fiducialMiddleLeftCol / Math.max(1, paperConfig.gridCols), 0.03, 0.01, 0.4); }
-    function getRightMiddleGuideRatio() { return clampFloatValue(paperConfig.fiducialMiddleRightCol / Math.max(1, paperConfig.gridCols), 0.97, 0.6, 0.99); }
+    // Ada DUA kerangka acuan yang berbeda, dan keduanya tidak boleh tertukar.
+    //
+    // (a) KERANGKA FIDUCIAL - keempat sudut yang diketahui adalah kotak fiducial
+    //     itu sendiri. Kotak tengah kiri/kanan berada PERSIS di tepi kiri/kanan
+    //     kerangka (u = 0 dan u = 1), dan tingginya mengikuti pembagian warp.
+    // (b) KERANGKA KERTAS - yang diketahui adalah sudut lembar kertas, sehingga
+    //     keenam kotak harus dihitung dari koordinat grid desain.
+    //
+    // Sebelumnya rasio (b) dipakai pada kerangka (a), sehingga titik awal ML/MR
+    // meleset ke dalam sejauh satu sel grid. Sekarang masing-masing punya rumus
+    // sendiri, dan keduanya mengikuti posisi fiducial yang diatur Desainer.
+    function getFrameMidRatioV() { return clampFloatValue(getSplitRows() / Math.max(1, getWarpRows()), 0.678, 0.05, 0.95); }
+    function getPaperColRatio(col) { return clampFloatValue(Number(col) / Math.max(1, paperConfig.gridCols), 0.5, 0, 1); }
+    function getPaperRowRatio(row) { return clampFloatValue(Number(row) / Math.max(1, paperConfig.gridRows), 0.5, 0, 1); }
+    // Keenam kotak fiducial dalam koordinat grid Desainer (sumber tunggal kebenaran).
+    function getFiducialGridPoints() {
+        const lc = getFiducialLeftCol(), rc = getFiducialRightCol();
+        const tr = 1, mr = paperConfig.fiducialMiddleRow + 1, br = paperConfig.gridRows - 1;
+        return { TL: { c: lc, r: tr }, TR: { c: rc, r: tr }, ML: { c: lc, r: mr },
+                 MR: { c: rc, r: mr }, BL: { c: lc, r: br }, BR: { c: rc, r: br } };
+    }
     function interpolateQuadPoint(quad, u, v) {
         const top = { x: quad.TL.x + ((quad.TR.x - quad.TL.x) * u), y: quad.TL.y + ((quad.TR.y - quad.TL.y) * u) };
         const bottom = { x: quad.BL.x + ((quad.BR.x - quad.BL.x) * u), y: quad.BL.y + ((quad.BR.y - quad.BL.y) * u) };
@@ -598,7 +650,41 @@
 
     const video = document.getElementById('video'), overlayCanvas = document.getElementById('overlay-canvas');
     const hiddenCanvas = document.getElementById('hidden-canvas'), resultCanvas = document.getElementById('result-canvas');
+    // Berjalan di dalam pembungkus? Kepala halaman internal disembunyikan.
+    try { if (window.self !== window.top) document.documentElement.classList.add('tersemat'); } catch (e) { }
+
     const scanStatus = document.getElementById('scan-status');
+    const scanLock = document.getElementById('scan-lock');
+    const scanLockText = document.getElementById('scan-lock-text');
+    const scanHint = document.getElementById('scan-hint');
+
+    // Status pemindaian punya SATU pintu penulisan dan elemen bertinggi tetap.
+    // Sebelumnya teks yang berubah-ubah ikut mengubah tinggi baris judul,
+    // sehingga seluruh halaman bergetar naik-turun sepanjang pemindaian.
+    const STATUS_WARNA = {
+        siap: 'bg-slate-900/80 text-slate-200',
+        cari: 'bg-slate-900/80 text-sky-300',
+        perbaiki: 'bg-amber-500/90 text-slate-900',
+        siapTangkap: 'bg-emerald-500/90 text-slate-900',
+        kerja: 'bg-emerald-600/90 text-white'
+    };
+    function setStatus(teks, nada = 'siap') {
+        if (!scanStatus) return;
+        scanStatus.className = 'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full text-[11px] font-bold '
+            + 'backdrop-blur-sm border border-white/10 whitespace-nowrap overflow-hidden '
+            + (STATUS_WARNA[nada] || STATUS_WARNA.siap);
+        scanStatus.textContent = teks;
+    }
+    function setLock(n) {
+        if (!scanLock || !scanLockText) return;
+        if (n === null || n === undefined) { scanLock.classList.add('hidden'); scanLock.classList.remove('flex'); return; }
+        scanLock.classList.remove('hidden'); scanLock.classList.add('flex');
+        scanLockText.textContent = `${n}/6`;
+        scanLockText.className = n >= 6 ? 'text-emerald-300' : (n >= 3 ? 'text-amber-300' : 'text-slate-300');
+    }
+    function setHint(teks) {
+        if (scanHint) scanHint.innerHTML = teks ? teks : '&nbsp;';
+    }
 
     // Sebagian modal memakai kelas Tailwind `hidden` (display:none) dan sebagian
     // memakai `opacity-0`. Keduanya harus ditangani, jika tidak modalnya terbuka
@@ -627,14 +713,14 @@
         pendingDeleteId = id;
         pendingDeleteAll = false;
         document.getElementById('confirm-title').innerText = 'Hapus Hasil';
-        document.getElementById('confirm-message').innerText = 'Apakah Anda yakin ingin menghapus hasil pemindaian ini dari tabel rekap?';
+        document.getElementById('confirm-message').innerText = 'Hapus hasil ini?';
         openModal('confirm-modal');
     }
     function showDeleteAllConfirm() {
         pendingDeleteId = null;
         pendingDeleteAll = true;
-        document.getElementById('confirm-title').innerText = 'Hapus Seluruh Rekap';
-        document.getElementById('confirm-message').innerText = 'Apakah Anda yakin ingin menghapus seluruh isi tabel Rekap Hasil Pemindaian?';
+        document.getElementById('confirm-title').innerText = 'Kosongkan Tabel';
+        document.getElementById('confirm-message').innerText = 'Hapus semua hasil pemindaian?';
         openModal('confirm-modal');
     }
 
@@ -693,7 +779,7 @@
         const active = sections.reduce((sum, section) => sum + parseAnswerKeyValue(section.id, answerKeyState[section.id] || '', section.questions).length, 0);
         const label = document.getElementById('lbl-answer-key');
         const summary = document.getElementById('answer-key-summary');
-        if (label) label.textContent = 'Panel Kunci Jawaban';
+        if (label) label.textContent = 'Kunci Jawaban';
         // Bila guru memberi bobot berbeda antar jenis soal, tampilkan totalnya supaya
         // pembagi nilai tidak perlu ditebak-tebak.
         const berbobot = sections.some(sec => Number(sec.poin) !== 1);
@@ -705,9 +791,9 @@
             }).join(' + ');
             const totalPoin = sections.reduce((sum, sec) =>
                 sum + parseAnswerKeyValue(sec.id, answerKeyState[sec.id] || '', sec.questions).length * Number(sec.poin), 0);
-            poinTeks = ` Bobot nilai: ${rincian} = ${trimNumber(totalPoin)} poin.`;
+            poinTeks = ` \u00b7 ${trimNumber(totalPoin)} poin`;
         }
-        if (summary) summary.textContent = total > 0 ? `Slot desain aktif: ${total} nomor. Kunci yang akan dinilai: ${active} nomor.${poinTeks}` : 'Belum ada blok soal aktif pada desain.';
+        if (summary) summary.textContent = total > 0 ? `${active}/${total} nomor berkunci${poinTeks}` : 'Desain belum aktif';
         syncRegradeControls();
     }
 
@@ -719,13 +805,13 @@
         if (button) button.disabled = ready === 0;
         if (hint) {
             if (!resultData.length) {
-                hint.textContent = 'Rekap masih kosong. Setelah memindai, setiap perubahan kunci akan langsung menyesuaikan Jumlah Benar, Jumlah Salah, Nilai, Nomor Benar, Nomor Salah, dan Jawaban Terdeteksi tanpa perlu pindai ulang.';
+                hint.textContent = 'Belum ada hasil. Setelah memindai, perubahan kunci langsung diikuti tanpa pindai ulang.';
             } else if (ready && !stale) {
-                hint.textContent = `${ready} baris rekap siap dihitung ulang kapan saja. Ubah kunci di atas dan angkanya menyesuaikan sendiri — tidak perlu memindai ulang.`;
+                hint.textContent = `${ready} baris siap dihitung ulang tanpa pindai ulang.`;
             } else if (ready && stale) {
-                hint.textContent = `${ready} baris siap dihitung ulang; ${stale} baris berasal dari pemindaian versi lama dan perlu dipindai ulang sekali saja.`;
+                hint.textContent = `${ready} baris siap \u00b7 ${stale} baris versi lama perlu dipindai ulang sekali.`;
             } else {
-                hint.textContent = 'Seluruh baris berasal dari pemindaian versi lama yang belum menyimpan data deteksi. Pindai ulang sekali saja, setelah itu perubahan kunci akan diikuti otomatis.';
+                hint.textContent = 'Semua baris versi lama. Pindai ulang sekali agar kunci bisa dihitung ulang.';
             }
         }
     }
@@ -738,14 +824,14 @@
             const q0 = section.questions[0];
             const pairs = q0 ? Math.max(1, Math.floor(q0.options.length / 2)) : 3;
             const contoh = Array.from({ length: pairs }, (_, i) => (i % 2 === 0 ? 'B' : 'S')).join('');
-            return `Setiap nomor berisi ${pairs} pasangan B/S, jadi tulis ${pairs} huruf per nomor (contoh: ${contoh}). Pisahkan antar nomor dengan koma.`;
+            return `${pairs} pasangan B/S per nomor \u2192 ${pairs} huruf (contoh: ${contoh}). Pisahkan dengan koma.`;
         }
         if (section.id === 'jawaban_pgk') {
             const counts = [...new Set(blocks.map(b => Math.max(1, Number(b.jawaban_benar) || 0)).filter(n => n > 0))];
             if (counts.length === 1) {
-                return `Desain menetapkan ${counts[0]} jawaban benar per nomor (contoh: ${'ABCDEFGH'.slice(0, counts[0])}). Pisahkan antar nomor dengan koma.`;
+                return `${counts[0]} jawaban benar per nomor (contoh: ${'ABCDEFGH'.slice(0, counts[0])}). Pisahkan dengan koma.`;
             }
-            return 'Tiap nomor boleh berisi lebih dari satu jawaban benar, contoh: AB atau ABC. Pisahkan antar nomor dengan koma.';
+            return 'Boleh lebih dari satu jawaban benar (contoh: AB). Pisahkan dengan koma.';
         }
         return section.help;
     }
@@ -898,10 +984,19 @@
         document.getElementById('placeholder-text').classList.add('hidden');
         camStableFrames = 0; camLostFrames = 0; camLastFids = null; camLastProcessTime = 0;
         isProcessing = false;
-        scanStatus.innerText = "Pemindai kamera tidak aktif";
+        setStatus('Siap', 'siap'); setLock(null); setHint('');
     }
 
-    const checkCV = setInterval(() => { if (typeof cv !== 'undefined' && cv.Mat) { clearInterval(checkCV); document.getElementById('cv-status').innerHTML = '<div class="w-3 h-3 rounded-full bg-emerald-500"></div> Engine OpenCV Siap'; } }, 500);
+        // Satu penanda kesiapan saja: chip status di atas pratinjau.
+    setStatus('Memuat mesin', 'cari');
+    const checkCV = setInterval(() => {
+        if (typeof cv !== 'undefined' && cv.Mat) {
+            clearInterval(checkCV);
+            const el = document.getElementById('cv-status');
+            if (el) el.innerHTML = '<div class="w-2 h-2 rounded-full bg-emerald-500"></div> <span class="hidden sm:inline">Siap</span>';
+            setStatus('Siap', 'siap');
+        }
+    }, 500);
     if (window.pdfjsLib) {
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
     }
@@ -1093,6 +1188,14 @@
         // mengembalikan ukurannya. Terbukti menyelamatkan 8 dari 8 kegagalan
         // pada uji frame kamera, tanpa mengubah gambar yang sudah berhasil.
         DETECT_MAX_DIM_RETRY: 2400,
+        // Hasil di bawah ambang ini dianggap belum memuaskan, sehingga mesin
+        // menaiki anak tangga pencarian berikutnya. Lembar yang selama ini
+        // berhasil selalu jauh di atasnya (terendah 0.79 pada 27 lembar acuan),
+        // jadi jalur lama tidak pernah tersentuh.
+        CONF_NAIK_TANGGA: 0.60,
+        // Di bawah ambang ini hasil pembacaan sudah pasti sampah. Lebih jujur
+        // menyatakan "tidak terbaca" daripada menyerahkan nilai yang salah.
+        CONF_TOLAK: 0.32,
         FAINT_FLOOR: 0.45,        // batas bawah mutlak untuk arsiran samar
         FAINT_DOMINANCE: 1.6,     // harus sekian kali lebih pekat dari saingan
         FAINT_RIVAL_MAX: 0.35     // saingan harus benar-benar bersih
@@ -1163,7 +1266,16 @@
 
     // Fiducial = kotak HITAM PEKAT dan PADAT. "extent" (luas/kotak pembatas)
     // memisahkannya dengan tegas dari bubble jawaban (lingkaran/cincin).
-    function eng_findCandidates(gray) {
+    // opsi.retrList  : ikut melihat kontur DI DALAM bingkai tertutup.
+    //   Lembar cetakan/PDF yang bersih sering punya bingkai tepi yang tersambung
+    //   penuh; dengan RETR_EXTERNAL seluruh isi lembar - termasuk keenam kotak
+    //   fiducial - tersembunyi di dalam bingkai itu dan tak pernah terlihat.
+    // opsi.extentMin : melonggarkan kotak yang keropos karena fotokopi.
+    function eng_findCandidates(gray, opsi) {
+        const o = opsi || {};
+        const retrMode = o.retrList ? cv.RETR_LIST : cv.RETR_EXTERNAL;
+        const extentMin = (typeof o.extentMin === 'number') ? o.extentMin : 0.70;
+        const maxKeep = o.maxKeep || 45;
         const w = gray.cols, h = gray.rows, diag = Math.hypot(w, h);
         const blur = new cv.Mat();
         cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
@@ -1180,8 +1292,8 @@
         bins.forEach(b => {
             cv.morphologyEx(b, b, cv.MORPH_CLOSE, k);
             const cnts = new cv.MatVector(), hier = new cv.Mat();
-            cv.findContours(b, cnts, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-            eng_pushContourStats(cnts, diag, out, 0.70);
+            cv.findContours(b, cnts, hier, retrMode, cv.CHAIN_APPROX_SIMPLE);
+            eng_pushContourStats(cnts, diag, out, extentMin);
             cnts.delete(); hier.delete(); b.delete();
         });
         k.delete(); blur.delete();
@@ -1193,7 +1305,7 @@
                 if (Math.hypot(d.cx - kp.cx, d.cy - kp.cy) <= 0.8 * Math.max(d.side, kp.side)) { ok = false; break; }
             }
             if (ok) keep.push(d);
-            if (keep.length >= 45) break;
+            if (keep.length >= maxKeep) break;
         }
         return keep;
     }
@@ -1265,8 +1377,8 @@
         return best;
     }
 
-    function eng_buildHypotheses(gray) {
-        const cands = eng_findCandidates(gray);
+    function eng_buildHypotheses(gray, opsi) {
+        const cands = eng_findCandidates(gray, opsi);
         const tri = eng_findTriples(cands);
         if (!tri.length) return [];
         const ASP = eng_fidAspectHW();
@@ -1837,7 +1949,7 @@
     // dilewati - itu murni pekerjaan yang terbuang. Tahap penilaian tetap ada
     // sebagai cadangan ketika hasil hipotesis teratas meragukan, sehingga
     // ketahanan terhadap foto miring/gelap tidak berkurang sedikit pun.
-    function eng_detectSekali(src, logPrefix, maxDim) {
+    function eng_detectSekali(src, logPrefix, maxDim, opsi) {
         const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
         const w = src.cols, h = src.rows;
         const sc = Math.min(1, maxDim / Math.max(w, h));
@@ -1846,7 +1958,7 @@
         const graySmall = new cv.Mat();
         cv.cvtColor(small, graySmall, cv.COLOR_RGBA2GRAY, 0);
         let hyps = [];
-        try { hyps = eng_buildHypotheses(graySmall); } catch (err) { console.warn('hipotesis gagal', err); }
+        try { hyps = eng_buildHypotheses(graySmall, opsi); } catch (err) { console.warn('hipotesis gagal', err); }
 
         let best = null, jalur = 'cepat';
         if (hyps.length) {
@@ -1932,14 +2044,167 @@
     // ini berhasil sama sekali tidak berubah. Tahap kedua hanya berjalan ketika
     // tahap pertama benar-benar gagal, sehingga tidak ada biaya tambahan pada
     // pemindaian yang normal.
-    function eng_detectAndWarp(src, logPrefix) {
-        let best = eng_detectSekali(src, logPrefix, ENG.DETECT_MAX_DIM);
-        if (best && best.warped) return best;
+    // ---------- Anak tangga terakhir: bertumpu pada BINGKAI lembar ----------
+    // Bila keenam kotak tidak bisa dirangkai, lembar masih menyimpan satu
+    // petunjuk yang sangat kuat: garis bingkai tepi yang dicetak Desainer.
+    // Bingkai itu melingkupi seluruh kisi, sehingga letak keenam kotak bisa
+    // DIHITUNG dari rasio grid desain, lalu masing-masing dihaluskan ke kotak
+    // hitam terdekat.
+    //
+    // Inilah yang menolong lembar keluaran mesin pindai kantor (Epson dan
+    // sejenisnya): hasilnya bersih dan tidak miring sehingga bingkainya sangat
+    // jelas, padahal kotak fiducialnya justru kerap MENYATU dengan garis tepi
+    // sehingga tak pernah lolos sebagai kandidat.
+    //
+    // Lembar dari mesin pindai juga sering masuk terputar 90 atau 180 derajat,
+    // jadi bingkai dicoba dalam KEEMPAT arah. Pemenangnya ditentukan oleh
+    // penilai keteraturan kisi yang sudah ada - bukan oleh tebakan.
+    function eng_cariQuadTerbesar(gray) {
+        const w = gray.cols, h = gray.rows, luasMin = 0.25 * w * h;
+        const blur = new cv.Mat();
+        cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+        const k7 = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(7, 7));
+        const bins = [];
+        let m = new cv.Mat(); cv.threshold(blur, m, 0, 255, cv.THRESH_BINARY_INV | cv.THRESH_OTSU); bins.push(m);
+        let bs = Math.max(31, Math.floor(Math.min(w, h) * 0.05)); if (bs % 2 === 0) bs++;
+        m = new cv.Mat(); cv.adaptiveThreshold(blur, m, 255, cv.ADAPTIVE_THRESH_MEAN_C, cv.THRESH_BINARY_INV, bs, 10); bins.push(m);
+        m = new cv.Mat(); cv.Canny(blur, m, 40, 130);
+        cv.dilate(m, m, cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3))); bins.push(m);
+        let terbaik = null, luasTerbaik = 0;
+        bins.forEach(b => {
+            cv.morphologyEx(b, b, cv.MORPH_CLOSE, k7);
+            const cnts = new cv.MatVector(), hier = new cv.Mat();
+            cv.findContours(b, cnts, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+            for (let i = 0; i < cnts.size(); i++) {
+                const c = cnts.get(i);
+                const luas = cv.contourArea(c);
+                if (luas < luasMin || luas <= luasTerbaik) continue;
+                const per = cv.arcLength(c, true);
+                for (const eps of [0.02, 0.035, 0.05]) {
+                    const ap = new cv.Mat();
+                    cv.approxPolyDP(c, ap, eps * per, true);
+                    if (ap.rows === 4 && cv.isContourConvex(ap)) {
+                        const pts = [];
+                        for (let j = 0; j < 4; j++) pts.push({ x: ap.data32S[j * 2], y: ap.data32S[j * 2 + 1] });
+                        terbaik = shared_orderPoints(pts); luasTerbaik = luas;
+                        ap.delete(); break;
+                    }
+                    ap.delete();
+                }
+            }
+            cnts.delete(); hier.delete(); b.delete();
+        });
+        k7.delete(); blur.delete();
+        return terbaik;
+    }
+
+    function eng_hipotesisDariBingkai(gray) {
+        const quad = eng_cariQuadTerbesar(gray);
+        if (!quad) return [];
+        // shared_orderPoints -> [TL, TR, BR, BL]
+        const sudut = [quad[0], quad[1], quad[2], quad[3]];
+        const gp = getFiducialGridPoints();
+        const span = Math.max(Math.hypot(sudut[3].x - sudut[0].x, sudut[3].y - sudut[0].y),
+                              Math.hypot(sudut[1].x - sudut[0].x, sudut[1].y - sudut[0].y));
+        const rad = Math.max(10, span * 0.022);
+        const hasil = [];
+        for (let k = 0; k < 4; k++) {
+            const r = sudut.slice(k).concat(sudut.slice(0, k));
+            const qq = { TL: r[0], TR: r[1], BR: r[2], BL: r[3] };
+            const titik = {}; let kena = 0;
+            Object.keys(gp).forEach(nama => {
+                const pt = interpolateQuadPoint(qq, getPaperColRatio(gp[nama].c), getPaperRowRatio(gp[nama].r));
+                const rr = eng_refinePoint(gray, pt.x, pt.y, rad);
+                if (rr) { titik[nama] = [rr.x, rr.y]; kena++; }
+                else titik[nama] = [pt.x, pt.y];
+            });
+            if (kena < 3) continue;
+            titik.mode = `bingkai${k * 90}(${kena})`;
+            hasil.push({ kena, h: titik });
+        }
+        hasil.sort((a, b) => b.kena - a.kena);
+        return hasil.map(x => x.h);
+    }
+
+    // Menilai hipotesis bingkai pada RESOLUSI PENUH. Jumlahnya paling banyak
+    // empat (satu per arah), jadi murah - dan penilaian setengah ukuran yang
+    // dipakai jalur biasa terbukti sering kalah oleh hipotesis palsu di sini.
+    function eng_detectBingkai(src, logPrefix, maxDim) {
+        const t0 = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+        const w = src.cols, h = src.rows;
+        const sc = Math.min(1, maxDim / Math.max(w, h));
+        const small = new cv.Mat();
+        cv.resize(src, small, new cv.Size(Math.max(1, Math.round(w * sc)), Math.max(1, Math.round(h * sc))));
+        const graySmall = new cv.Mat();
+        cv.cvtColor(small, graySmall, cv.COLOR_RGBA2GRAY, 0);
+        let hyps = [];
+        try { hyps = eng_hipotesisDariBingkai(graySmall); }
+        catch (err) { console.warn('hipotesis bingkai gagal', err); }
+        small.delete(); graySmall.delete();
+        if (!hyps.length) return null;
+
+        const grayFull = new cv.Mat();
+        cv.cvtColor(src, grayFull, cv.COLOR_RGBA2GRAY, 0);
+        let best = null;
+        hyps.forEach(hy => {
+            let r = null;
+            try { r = eng_fullPass(src, grayFull, hy, sc); } catch (err) { r = null; }
+            if (!r || !r.warped) { if (r && r.warped) eng_buangHasil(r); return; }
+            if (!best || r.conf > best.conf) { if (best) eng_buangHasil(best); best = r; }
+            else eng_buangHasil(r);
+        });
+        grayFull.delete();
+        if (best) {
+            const ms = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0);
+            logAI(`${logPrefix} Enam kotak dihitung dari bingkai lembar (${best.mode}) dalam ${ms} ms, keteraturan kisi ${(best.conf * 100).toFixed(0)}%.`);
+        }
+        return best;
+    }
+
+    // TANGGA PENYELAMAT
+    // Anak tangga pertama persis seperti dulu, jadi setiap lembar yang selama ini
+    // terbaca tetap memakai jalur dan waktu yang sama. Anak tangga berikutnya
+    // hanya dinaiki bila lembar benar-benar gagal atau hasilnya jelas meragukan -
+    // inilah yang menutup celah pada lembar hasil mesin pindai/fotokopi dan pada
+    // PDF desain yang bingkainya masih utuh.
+    const ENG_TANGGA = [
+        { nama: 'baku', opsi: null },
+        { nama: 'bingkai-tembus', opsi: { retrList: true } },
+        { nama: 'bertumpu-bingkai', bingkai: true }
+    ];
+
+    // batasTangga: jalur kamera berhenti lebih awal supaya Live Scan tetap
+    // gesit; jalur unggah/PDF menaiki seluruh tangga karena di sanalah lembar
+    // hasil mesin pindai kantor masuk.
+    function eng_detectAndWarp(src, logPrefix, batasTangga) {
         const naik = Math.max(ENG.DETECT_MAX_DIM_RETRY, ENG.DETECT_MAX_DIM);
-        if (naik <= ENG.DETECT_MAX_DIM) return best;
-        logAI(`${logPrefix} Enam kotak fiducial belum ketemu. Mengulang dengan resolusi deteksi ${naik} px...`);
-        const lagi = eng_detectSekali(src, logPrefix, naik);
-        return (lagi && lagi.warped) ? lagi : best;
+        const batas = Math.min(ENG_TANGGA.length, batasTangga || ENG_TANGGA.length);
+        let best = null;
+        for (let t = 0; t < batas; t++) {
+            const anak = ENG_TANGGA[t];
+            if (t > 0) logAI(`${logPrefix} Belum meyakinkan. Mencoba pencarian "${anak.nama}"...`);
+            const dims = (naik > ENG.DETECT_MAX_DIM) ? [ENG.DETECT_MAX_DIM, naik] : [ENG.DETECT_MAX_DIM];
+            for (let i = 0; i < dims.length; i++) {
+                if (t === 0 && i === 1) logAI(`${logPrefix} Enam kotak fiducial belum ketemu. Mengulang dengan resolusi deteksi ${dims[i]} px...`);
+                const r = anak.bingkai
+                    ? eng_detectBingkai(src, logPrefix, dims[i])
+                    : eng_detectSekali(src, logPrefix, dims[i], anak.opsi);
+                if (r && r.warped) {
+                    if (!best || !best.warped || (r.conf || 0) > (best.conf || 0)) {
+                        if (best && best.warped && best !== r) eng_buangHasil(best);
+                        best = r;
+                    } else if (r !== best) { eng_buangHasil(r); }
+                    if ((best.conf || 0) >= ENG.CONF_NAIK_TANGGA) return best;
+                } else if (r && !best) { best = r; }
+            }
+        }
+        return best;
+    }
+
+    // Melepas mat milik hasil deteksi yang tidak jadi dipakai, supaya memori
+    // OpenCV tidak menumpuk saat tangga penyelamat dinaiki.
+    function eng_buangHasil(r) {
+        try { if (r && r.warped && typeof r.warped.delete === 'function') r.warped.delete(); } catch (e) {}
     }
 
     // Ekstraksi terpadu: dipakai oleh jalur kamera maupun unggah/PDF,
@@ -2006,6 +2271,66 @@
             }
         }
         return cells;
+    }
+
+    // ---- Pemeriksa kepatuhan terhadap Desainer -------------------------------
+    // Sel desain di luar bingkai fiducial akan ditekuk paksa ke tepi oleh
+    // designerToGridCol/Row. Dulu hal itu terjadi diam-diam; sekarang bisa
+    // dilaporkan supaya desain yang salah tempat ketahuan sejak awal.
+    function selDiLuarBingkai(dr, dc) {
+        const r = Number(dr) - 1, c = Number(dc) - getFiducialLeftCol();
+        return (r < 0 || c < 0 || r > getGridRowsCount() - 1 || c > getGridColsCount() - 1);
+    }
+    function kumpulkanSelDesain() {
+        const daftar = [];
+        getVisibleAnswerSections().forEach(section => {
+            section.questions.forEach(q => q.options.forEach(o =>
+                daftar.push({ asal: section.id, r: Number(o.r), c: Number(o.c) })));
+        });
+        const idn = activeLayoutConfig?.identitas || {};
+        ['nama', 'jenis_kelamin', 'no_peserta', 'kelas'].forEach(key => {
+            const cfg = idn[key];
+            if (!cfg || cfg.visible === false) return;
+            const layout = cfg.layout || 'V';
+            const jml = layout === 'V' ? (Number(cfg.w) || 0) : (Number(cfg.h) || 0);
+            const opt = layout === 'V' ? (Number(cfg.h) || 0) : (Number(cfg.w) || 0);
+            for (let i = 0; i < jml; i++) for (let o = 0; o < opt; o++) {
+                daftar.push({
+                    asal: 'identitas.' + key,
+                    c: layout === 'V' ? Number(cfg.c) + i : Number(cfg.c) + o,
+                    r: layout === 'V' ? Number(cfg.r) + o : Number(cfg.r) + i
+                });
+            }
+        });
+        return daftar;
+    }
+    function selLuarBingkai() {
+        return kumpulkanSelDesain().filter(sel => selDiLuarBingkai(sel.r, sel.c));
+    }
+    function jumlahSlotJawaban() {
+        return getVisibleAnswerSections().reduce((n, sec) => n + sec.questions.length, 0);
+    }
+    function jumlahSelIdentitas(key) {
+        const cfg = (activeLayoutConfig?.identitas || {})[key];
+        if (!cfg || cfg.visible === false) return 0;
+        const layout = cfg.layout || 'V';
+        const jml = layout === 'V' ? (Number(cfg.w) || 0) : (Number(cfg.h) || 0);
+        const opt = layout === 'V' ? (Number(cfg.h) || 0) : (Number(cfg.w) || 0);
+        return jml * opt;
+    }
+    function geometriMesin() {
+        return {
+            aspectHW: getWarpRows() / Math.max(1, getWarpCols()),
+            midRatio: getSplitRows() / Math.max(1, getWarpRows()),
+            diameterRatio: bubbleConfig.diameterRatio,
+            strokeWidth: bubbleConfig.strokeWidth,
+            fontSize: bubbleConfig.fontSize,
+            fontWeight: bubbleConfig.fontWeight,
+            warpCols: getWarpCols(), warpRows: getWarpRows(), splitRows: getSplitRows(),
+            fiducialLeftCol: getFiducialLeftCol(), fiducialRightCol: getFiducialRightCol(),
+            gridSize: GRID_SIZE, warpWidth: getWarpWidth(), warpHeight: getWarpHeight(),
+            fiducialGrid: getFiducialGridPoints()
+        };
     }
 
     function eng_verifyLayout(lat, aff, idx) {
@@ -2082,11 +2407,9 @@
                 if (!layoutWarnShown && !batchImportActive) {
                     layoutWarnShown = true;
                     showCustomAlert(
-                        'Desain belum sepenuhnya cocok dengan lembar yang dipindai.\n\n' +
-                        'Blok berikut ada di desain tetapi TIDAK ADA di kertas:\n  - ' +
-                        bad.join('\n  - ') +
-                        '\n\nBlok itu diabaikan supaya hasil pemindaian tetap bersih. ' +
-                        'Buka Desainer LJK, matikan blok tersebut (atau perbaiki koordinatnya), lalu tekan "Simpan dan Sinkronkan".'
+                        'Blok berikut ada di desain tetapi tidak ada di kertas:\n  \u2022 ' +
+                        bad.join('\n  \u2022 ') +
+                        '\n\nBlok itu diabaikan. Matikan atau perbaiki koordinatnya di Desainer LJK, lalu Simpan & Sinkronkan.'
                     );
                 }
             }
@@ -2630,7 +2953,7 @@
     function cam_performDualWarp(src, fid) {
         let fullWarped = new cv.Mat(getWarpHeight(), getWarpWidth(), cv.CV_8UC4, new cv.Scalar(255,255,255,255));
 
-        // PERBAIKAN: Rasio LJK fisik mutlak (Fiducial tengah persis di getMiddleGuideRatio())
+        // Baris pemisah warp mengikuti posisi kotak fiducial tengah dari Desainer.
         let splitY = getSplitRows() * GRID_SIZE;
         let botHeight = getWarpHeight() - splitY;
 
@@ -2850,7 +3173,7 @@
             }
 
             // --- Jalur penuh: cari keenam kotak dari nol ---
-            const best = eng_detectAndWarp(src, label);
+            const best = eng_detectAndWarp(src, label, 2);
             if (best && best.warped && best.conf >= 0.35) {
                 warped = best.warped; pre = best;
             } else {
@@ -2920,7 +3243,7 @@
                 const cadangan = cam_tryShot(list[0], fids, '[KAMERA]', true);
                 if (cadangan) { best = cadangan; tampilMilikPemenang = true; }
             }
-            if (!best) throw new Error("Kisi bubble tidak dapat dikunci dari kamera. Pastikan keenam kotak hitam terlihat utuh dan lembar tidak buram.");
+            if (!best) throw new Error("Kisi bubble tidak terkunci. Pastikan enam kotak hitam terlihat utuh dan lembar tidak buram.");
             // Bila pemenangnya bukan frame yang terakhir digambar, gambar ulang
             // supaya penanda di layar benar-benar milik hasil yang disimpan.
             if (!tampilMilikPemenang) {
@@ -2966,9 +3289,10 @@
 
     document.getElementById('btn-camera').addEventListener('click', async () => {
         if (!validateKey() || isProcessing) return;
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { showCustomAlert("Browser belum memberikan izin akses kamera."); return; }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { showCustomAlert("Browser tidak mengizinkan akses kamera."); return; }
 
         resetUI();
+        setHint('Ketuk layar untuk menangkap sekarang');
         video.classList.remove('hidden'); overlayCanvas.classList.remove('hidden');
 
         try {
@@ -2989,7 +3313,7 @@
                     startStreamLoop();
                 });
             };
-        } catch (e) { logAI("Kamera Error: " + e.message, true); showCustomAlert("Akses kamera ditolak oleh browser atau perangkat."); resetUI(); }
+        } catch (e) { logAI("Kamera Error: " + e.message, true); showCustomAlert("Akses kamera ditolak."); resetUI(); }
     });
 
     // Satu pintu penangkapan: dipakai oleh gerbang kestabilan, jaring pengaman
@@ -3012,7 +3336,7 @@
         // Kamera JANGAN dimatikan dulu: frame beruntun masih diambil dari video
         // yang hidup. Pematian dilakukan setelah frame terkumpul.
         document.getElementById('loader-overlay').classList.remove('hidden');
-        scanStatus.innerHTML = '<span class="text-emerald-500 font-bold">MENANGKAP...</span>';
+        setStatus('Menangkap', 'kerja');
         cam_captureBurst(finalFids);
         return true;
     }
@@ -3056,8 +3380,8 @@
                         TR: guideQuad.TR,
                         BL: guideQuad.BL,
                         BR: guideQuad.BR,
-                        ML: interpolateQuadPoint(guideQuad, getLeftMiddleGuideRatio(), getMiddleGuideRatio()),
-                        MR: interpolateQuadPoint(guideQuad, getRightMiddleGuideRatio(), getMiddleGuideRatio())
+                        ML: interpolateQuadPoint(guideQuad, 0, getFrameMidRatioV()),
+                        MR: interpolateQuadPoint(guideQuad, 1, getFrameMidRatioV())
                     };
 
                     let scale = hiddenCanvas.width / Math.max(1, cw);
@@ -3089,11 +3413,12 @@
                         const paperPts = cam_detectPaperRegionFallback(gray);
                         if (paperPts) {
                             const paperQuad = { TL: paperPts[0], TR: paperPts[1], BR: paperPts[2], BL: paperPts[3] };
-                            const estFids = {
-                                TL: paperQuad.TL, TR: paperQuad.TR, BR: paperQuad.BR, BL: paperQuad.BL,
-                                ML: interpolateQuadPoint(paperQuad, getLeftMiddleGuideRatio(), getMiddleGuideRatio()),
-                                MR: interpolateQuadPoint(paperQuad, getRightMiddleGuideRatio(), getMiddleGuideRatio())
-                            };
+                            const gp = getFiducialGridPoints();
+                            const estFids = {};
+                            Object.keys(gp).forEach(k => {
+                                estFids[k] = interpolateQuadPoint(paperQuad,
+                                    getPaperColRatio(gp[k].c), getPaperRowRatio(gp[k].r));
+                            });
                             const dariKertas = cam_trackFiducials(gray, estFids, 40);
                             if (dariKertas.n > hasil.n) hasil = dariKertas;
                         }
@@ -3156,14 +3481,12 @@
 
                         const stabPercent = Math.min(100, Math.round((camStableFrames / STABLE_FRAMES_TO_CAPTURE) * 100));
                         // Katakan APA yang sedang menghambat, jangan hanya diam di 0%.
-                        let pesan, warna;
-                        if (!okConf) { pesan = 'SEJAJARKAN KERTAS'; warna = 'text-amber-500'; }
-                        else if (!okSharp) { pesan = 'ATUR FOKUS / TAMBAH CAHAYA'; warna = 'text-amber-500'; }
-                        else if (!okMove) { pesan = 'TAHAN, JANGAN BERGERAK'; warna = 'text-amber-500'; }
-                        else { pesan = `STABIL ${stabPercent}%`; warna = 'text-emerald-500'; }
-                        scanStatus.innerHTML = `<span class="${warna} font-bold">${pesan}</span>`
-                            + `<span class="block text-[10px] font-normal text-emerald-600">KOTAK TERKUNCI ${terkunci}/6</span>`
-                            + `<span class="block text-[10px] font-normal text-slate-400">ketuk layar untuk menangkap sekarang</span>`;
+                        // Pesan pendek dan tegas; rinciannya ada di lencana kunci.
+                        if (!okConf) setStatus('Sejajarkan kertas', 'perbaiki');
+                        else if (!okSharp) setStatus('Kurang tajam', 'perbaiki');
+                        else if (!okMove) setStatus('Tahan', 'perbaiki');
+                        else setStatus(`Stabil ${stabPercent}%`, 'siapTangkap');
+                        setLock(terkunci);
 
                         ctx.beginPath();
                         ctx.moveTo(camLastFids.TL.x / scale, camLastFids.TL.y / scale);
@@ -3188,8 +3511,8 @@
                         camLostFrames++;
                         camStableFrames = Math.max(0, camStableFrames - 1);
                         camLockedSince = 0;
-                        scanStatus.innerHTML = `<span class="text-blue-500 font-bold">MENCARI KOTAK SUDUT...</span>`
-                            + `<span class="block text-[10px] font-normal text-slate-400">KOTAK TERKUNCI ${terkunci}/6</span>`;
+                        setStatus('Mencari kotak', 'cari');
+                        setLock(terkunci);
                     }
                 } catch (err) { console.error(err); }
                 finally { if(smallMat) smallMat.delete(); if(gray) gray.delete(); }
@@ -3213,7 +3536,16 @@
             const best = eng_detectAndWarp(src, prefix);
             if (!best || !best.warped) {
                 logAI(`${prefix} Enam kotak fiducial tidak ditemukan.`, true);
-                if (!batchMode) showCustomAlert("Diagnostik Pemindaian:\nEnam kotak fiducial tidak dapat ditemukan pada gambar ini.\n\nPastikan seluruh bidang kertas ikut terfoto (keempat sudut dan kedua kotak tengah tidak terpotong) dan tidak tertutup bayangan pekat.");
+                if (!batchMode) showCustomAlert("Enam kotak hitam tidak ditemukan.\n\nPastikan seluruh kertas terfoto: keempat sudut dan kedua kotak tengah tidak terpotong, dan tidak tertutup bayangan.");
+                return false;
+            }
+            // Kisi yang terlalu berantakan pasti menghasilkan pembacaan ngawur.
+            // Nilai yang salah jauh lebih berbahaya daripada lembar yang jujur
+            // dinyatakan gagal, jadi lembar seperti ini ditolak.
+            if ((best.conf || 0) < ENG.CONF_TOLAK) {
+                logAI(`${prefix} Kisi bubble terlalu kacau (keteraturan ${(best.conf * 100).toFixed(0)}%). Lembar ditolak agar tidak memberi nilai yang salah.`, true);
+                best.warped.delete();
+                if (!batchMode) showCustomAlert("Lembar ini tidak dapat dibaca dengan yakin.\n\nPindai ulang pada 300 dpi tanpa kemiringan, atau foto ulang dengan cahaya merata.");
                 return false;
             }
             finalWarpedMat = best.warped;
@@ -3260,7 +3592,7 @@
                     + `kecocokan blok jawaban ${(bacaan.cocokJawab * 100).toFixed(0)}%, `
                     + `ambang arsiran ${bacaan.threshold.toFixed(2)}${diputar ? ', lembar diputar 180 derajat' : ''}.`);
             } else if (!batchMode) {
-                showCustomAlert("Diagnostik Pemindaian:\nKisi bubble tidak dapat dikunci pada gambar ini. Gambar hasil pelurusan tetap ditampilkan agar dapat diperiksa.");
+                showCustomAlert("Kisi bubble tidak terkunci. Gambar hasil pelurusan tetap ditampilkan untuk diperiksa.");
             }
             return isSuccess;
         } catch (err) {
@@ -3306,7 +3638,7 @@
             const buffer = await file.arrayBuffer();
             const pdf = await pdfjsLib.getDocument({ data: buffer }).promise;
             for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex++) {
-                scanStatus.innerText = `PDF ${pageIndex}/${pdf.numPages}`;
+                setStatus(`PDF ${pageIndex}/${pdf.numPages}`, 'kerja');
                 document.getElementById('loader-text').innerHTML = `Memproses PDF ${pageIndex}/${pdf.numPages}<br><span class="text-[9px] text-slate-400">Halaman LJK sedang dianalisis...</span>`;
                 const page = await pdf.getPage(pageIndex);
                 await renderPdfPageToCanvas(page, hiddenCanvas);
@@ -3326,7 +3658,7 @@
             isProcessing = false;
             document.getElementById('loader-overlay').classList.add('hidden');
             document.getElementById('loader-text').innerHTML = 'Menganalisis lembar LJK<br><span class="text-[9px] text-slate-400">Menjalankan pipeline pemindaian presisi...</span>';
-            scanStatus.innerText = "Pemindaian PDF selesai";
+            setStatus('PDF selesai', 'siapTangkap');
             if (inputEl) inputEl.value = '';
         }
     }
@@ -3979,7 +4311,7 @@
     updateTable();
 
     document.getElementById('btn-clear-results').addEventListener('click', () => {
-        if (!resultData.length) return showCustomAlert("Tabel rekap masih kosong.");
+        if (!resultData.length) return showCustomAlert("Tabel masih kosong.");
         showDeleteAllConfirm();
     });
 
@@ -4125,7 +4457,7 @@
     });
 
     document.getElementById('btn-export').addEventListener('click', () => {
-        if (!resultData.length) return showCustomAlert("Belum ada hasil pemindaian untuk diekspor.");
+        if (!resultData.length) return showCustomAlert("Belum ada hasil.");
         const ws = XLSX.utils.json_to_sheet(resultData.map(d => ({
             "Nomor Peserta": d.peserta,
             "Nama": d.name,
@@ -4166,6 +4498,15 @@
                    frameStabil: STABLE_FRAMES_TO_CAPTURE, burst: CAM_BURST_FRAMES,
                    ringkas: cam_ringkasBacaan, lebihBaik: cam_bacaanLebihBaik, cukup: cam_bacaanCukup,
                    lacak: cam_lengkapiFiducial },
+        // dipakai berkas uji kepatuhan Desainer <-> Pemindai
+        getRescueLadder: () => ENG_TANGGA.map(x => x.nama),
+        getEngineThresholds: () => ({ naikTangga: ENG.CONF_NAIK_TANGGA, tolak: ENG.CONF_TOLAK,
+                                      confBaik: ENG.CONF_GOOD, deteksi: ENG.DETECT_MAX_DIM,
+                                      deteksiUlang: ENG.DETECT_MAX_DIM_RETRY }),
+        getEngineGeometry: () => geometriMesin(),
+        getOutOfFrameCells: () => selLuarBingkai(),
+        getAnswerSlotCount: () => jumlahSlotJawaban(),
+        getIdentityCellCount: (key) => jumlahSelIdentitas(key),
         getEngineState: () => ({ fillThreshold: engFillThreshold, gridQuality: engLastQuality,
             lattice: engLastLattice ? { ...engLastLattice } : null,
             affine: engLastAffine ? { cx: [...engLastAffine.cx], cy: [...engLastAffine.cy], n: engLastAffine.n } : null })
